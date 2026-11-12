@@ -42,7 +42,7 @@ describe.each([7, 2024])('国家表 · seed=%i', (seed) => {
       expect(r.faith).toEqual(stateFaithAt(civ.religion, r.p.id, y));
       expect(r.ties).toEqual(polityTies(civ, r.p.id, y));
       expect(new Set(r.near)).toEqual(neighborsAt(civ, r.p.id, y).near);
-      expect(popCell(r.pop)).toMatch(/^\d+(\.\d)? 万$|^\d+ 人$/);
+      expect(popCell(r.pop)).toMatch(/^\d+(\.\d)? (万|亿)$|^\d+ 人$/);
     }
     // 至少有一国写得出时代(有发明数据)
     expect(alive.some((r) => r.era && r.era.era >= 0 && r.era.progress >= 0 && r.era.progress <= 1)).toBe(true);

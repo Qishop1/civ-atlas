@@ -73,7 +73,7 @@ describe('治绩的四行', () => {
         expect(f.pop[0]).toBeCloseTo(p0, 6);
         expect(f.pop[1]).toBeCloseTo(p1, 6);
         const pop = r.rows[1];
-        const w = (v: number) => populationLabel(v).replace(/^约 /, '').replace(/万人$/, '万');
+        const w = (v: number) => populationLabel(v).replace(/^约 /, '').replace(/(万|亿)人$/, '$1');
         if (p0 > 0 && Math.round((Math.abs(p1 - p0) / p0) * 100) >= 1) {
           if (w(p0) === w(p1)) expect(pop).toEqual({ k: '人口', lines: [`约 ${w(p0)}`], note: '大致没变' });
           else {
