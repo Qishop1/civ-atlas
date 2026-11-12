@@ -297,8 +297,8 @@ export function skyParticles(seed: number): Float32Array {
   const { n, e1, e2 } = galaxyFrame(seed);
   for (let i = 0; i < BAND; i++) {
     const inBulge = i < BAND * 0.3;
-    const lon = inBulge ? Math.max(-Math.PI, Math.min(Math.PI, gauss() * 0.42)) : r() * Math.PI * 2 - Math.PI;
-    const lat = inBulge ? gauss() * 0.12 : gauss() * (0.07 + 0.14 * Math.exp(-(lon * lon) / (2 * 0.42 * 0.42)));
+    const lon = inBulge ? Math.max(-Math.PI, Math.min(Math.PI, gauss() * 0.25)) : r() * Math.PI * 2 - Math.PI;
+    const lat = inBulge ? gauss() * 0.085 : gauss() * (0.07 + 0.14 * Math.exp(-(lon * lon) / (2 * 0.25 * 0.25)));
     const cl = Math.cos(lat), sl = Math.sin(lat), co = Math.cos(lon), so = Math.sin(lon);
     push([cl * (co * e1[0] + so * e2[0]) + sl * n[0], cl * (co * e1[1] + so * e2[1]) + sl * n[1], cl * (co * e1[2] + so * e2[2]) + sl * n[2]], 0.1 + 0.4 * Math.pow(r(), 3), 0.3 + 0.6 * r());
   }

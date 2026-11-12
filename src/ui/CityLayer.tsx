@@ -14,6 +14,7 @@
  *             城心水泥灰、郊区灰褐、零星深色工业区和成块绿地,叠一点山地明暗
  * 显示:按地图投影把贴图分成网格、一块块仿射贴上去(平面图、地球仪都行);不插值(放大不糊)。年份变了才重算贴图,镜头动了只重贴。
  */
+import { setGlobeCity } from './globeCity';
 import { cityPos } from '../render/civ/cityPos';
 import { useEffect, useMemo, useRef, type MutableRefObject } from 'react';
 import type { Civ } from '../gen/civ/types';
@@ -38,6 +39,8 @@ export interface CityLayerProps {
   urban: boolean;
   night: boolean;
   hidden?: boolean;
+  /** 第六十九轮:地球仪上 —— 城区贴图交给球的着色器画(ui/globeCity.ts),这一层只画街道 */
+  globe?: boolean;
 }
 
 /** 像素的整数哈希 → [0, 1) */
@@ -48,7 +51,7 @@ const ph = (x: number, y: number) => {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 };
 
-export function CityLayer({ civ, world, raster, toClient, urban, night, hidden }: CityLayerProps) {
+export function CityLayer({ civ, world, raster, toClient, urban, night, hidden, globe }: CityLayerProps) {
   const ok = !!civ && civ.viable && civ.settlements.length > 0;
   const data = useMemo(() => {
     if (!ok) return null;
@@ -123,6 +126,8 @@ export function CityLayer({ civ, world, raster, toClient, urban, night, hidden }
     return { c, cellW, roadOf, roads, near, cityAng, sp };
   }, [civ, world, ok]);
   const canvas = useRef<HTMLCanvasElement | null>(null);
+  const ccanvas = useRef<HTMLCanvasElement | null>(null);
+  const tcanvas = useRef<HTMLCanvasElement | null>(null);
   const show = !hidden && ok && (urban || night);
 
   useEffect(() => {
@@ -145,6 +150,27 @@ export function CityLayer({ civ, world, raster, toClient, urban, night, hidden }
     tex.width = TW;
     tex.height = TH;
     const tg = tex.getContext('2d')!;
+    // 第七十二轮:明暗贴图(灰 = 128 不变,亮 = 提亮,暗 = 压暗;平面图上 soft-light 叠)
+    const ltex = document.createElement('canvas');
+    ltex.width = TW;
+    ltex.height = TH;
+    const lg = ltex.getContext('2d')!;
+    /** 屏幕像素级的细颗粒(灰 128 ± ,2×2 一粒),跟着地图平移 */
+    const grain = document.createElement('canvas');
+    grain.width = grain.height = 128;
+    {
+      const gg2 = grain.getContext('2d')!;
+      const im = gg2.createImageData(128, 128);
+      for (let y = 0; y < 128; y++)
+        for (let x = 0; x < 128; x++) {
+          const v = 128 + (ph((x >> 1) * 7 + 1, (y >> 1) * 11 + 3) - 0.5) * 120 + (ph(x + 5, y + 9) - 0.5) * 40;
+          const o = (y * 128 + x) * 4;
+          im.data[o] = im.data[o + 1] = im.data[o + 2] = v;
+          im.data[o + 3] = 255;
+        }
+      gg2.putImageData(im, 0, 0);
+    }
+    let gcv: HTMLCanvasElement | null = null;
     const glow = document.createElement('canvas');
     glow.width = Math.ceil(TW / 8);
     glow.height = Math.ceil(TH / 8);
@@ -155,6 +181,13 @@ export function CityLayer({ civ, world, raster, toClient, urban, night, hidden }
     // 建成区的噪声和年份无关:第一次用到某个像素时算好存起来(0 = 还没算;门槛噪声 1–255;标记位 1 = 绿地、2 = 工业区)
     let nzThr: Uint8Array | null = null;
     let nzFlag: Uint8Array | null = null;
+    /** 第七十二轮:农田强度(主图栅格,模糊过) */
+    let farmI: Float32Array | null = null;
+    let farmT: Float32Array | null = null;
+    /** 每格能不能种(0–1):气温、降水、坡度 */
+    let arable: Float32Array | null = null;
+    /** 开垦标尺:末年乡村人口(有人的地块)的中位数 */
+    let farmRef: number | null = null;
     const tmp = new Float32Array(raster.w * raster.h);
     const uArr = new Float32Array(raster.w * raster.h);
     // 第六十二轮:城市生长(SLEUTH 式,见 buildGrowth):每格"多早建起来"的分数、归哪座城、各城按分数分档的累计格数;
@@ -306,7 +339,13 @@ export function CityLayer({ civ, world, raster, toClient, urban, night, hidden }
       // 每格的难易:对数正态(三个均匀数凑一个近似正态)
       const het = new Float32Array(N);
       // 波动别太大(第六十二轮第二版:0.9 → 0.45,太大城区碎成一片片)
-      for (let i = 0; i < N; i++) het[i] = Math.exp(0.45 * (ph(i, 7) + ph(i, 11) + ph(i, 13) - 1.5) * 2);
+      // 第六十九轮:难易度是成片的噪声(逐格独立的随机走远了就互相抵消,城长成圆的、城与城之间切成 Voronoi 格子)
+      for (let i = 0; i < N; i++) {
+        const x = i % PW,
+          y = (i / PW) | 0;
+        const lo = vnoise(x / 14, y / 14, 7001) * 0.65 + vnoise(x / 5, y / 5, 7013) * 0.35;
+        het[i] = Math.exp(1.6 * (lo - 0.5) * 2 + 0.25 * (ph(i, 7) - 0.5));
+      }
       const S = new Float32Array(N).fill(Infinity);
       const own = new Int32Array(N).fill(-1);
       const hk: number[] = [],
@@ -374,7 +413,7 @@ export function CityLayer({ civ, world, raster, toClient, urban, night, hidden }
           if (yy < 0 || yy >= PH) continue;
           const j = yy * PW + ((x + NBX[t] + PW) % PW);
           if (done[j] || raster.water[j]) continue;
-          const step = (t < 4 ? 1 : 1.414) * (1 + 4 * steepArr![j]) * (road[j] ? 0.35 : 1) * het[j];
+          const step = (t < 4 ? 1 : 1.414) * (1 + 4 * steepArr![j]) * (road[j] ? 0.15 : 1) * het[j];
           const v = k0 + step;
           if (v < S[j]) {
             S[j] = v;
@@ -478,6 +517,14 @@ export function CityLayer({ civ, world, raster, toClient, urban, night, hidden }
       };
       // 第六十一轮:固定标尺 —— 末年最密那 1% = 满格,每年都按它折算(比末年还密的年份取大的);人口涨了城就长大,不会"逆城市化"
       if (night && topRef === null) topRef = fillDens(c.endYear).top;
+      // 第七十一轮:开垦标尺(末年,固定 —— 人多了田就多,不会因为别处更密反而变少)
+      if (!night && farmRef === null) {
+        fillDens(c.endYear, false);
+        const v: number[] = [];
+        for (let i = 0; i < n; i++) if (field[i] > 0) v.push(field[i]);
+        v.sort((a, b) => a - b);
+        farmRef = v.length ? Math.max(1e-6, v[Math.floor(v.length * 0.75)]) : 1;
+      }
       const { pops, top: top0 } = fillDens(year, night);
       const top = Math.max(topRef ?? top0, top0);
       popsNow = pops;
@@ -501,6 +548,8 @@ export function CityLayer({ civ, world, raster, toClient, urban, night, hidden }
       // ---- 按像素:亮不亮、多亮 ----
       const img = tg.createImageData(TW, TH);
       const d = img.data;
+      const limg = !night ? lg.createImageData(TW, TH) : null;
+      const ld = limg ? limg.data : d;
       // 第六十二轮:各城这一年建多少格(人口 × 人均占地 60–300 m² × 视觉放大 27 倍,总面积和上一版光场画法对上),按生长的先后取前面那么多;最早的 12% = 市中心、到 35% = 老城
       const G = buildGrowth();
       const RM = riverMask();
@@ -533,7 +582,8 @@ export function CityLayer({ civ, world, raster, toClient, urban, night, hidden }
           const e = elec(st.region);
           const k = ((0.06 + 0.24 * e) * 27) / (pxKm * pxKm);
           const urban = pops[si] * k;
-          thrNow[si] = pops[si] > 0 ? at(si, urban + 0.6 * e * hinter[si] * k) : -1;
+          // 第六十九轮:腹地加成偏给大城(小城保持小,不再满地一样大的斑)
+          thrNow[si] = pops[si] > 0 ? at(si, urban + 0.45 * e * Math.min(1, Math.max(0.15, pops[si] / 3000)) * hinter[si] * k) : -1;
           // 市中心、老城只按城市人口
           coreNow[si] = at(si, urban * 0.12);
           oldNow[si] = at(si, urban * 0.35);
@@ -554,6 +604,27 @@ export function CityLayer({ civ, world, raster, toClient, urban, night, hidden }
           mThr[i] = Math.max(-50, Math.min(50, thrNow[o] - sv));
           mOld![i] = Math.max(-50, Math.min(50, oldNow[o] - sv));
           mCore![i] = Math.max(-50, Math.min(50, coreNow[o] - sv));
+        }
+        // 第六十九轮:余量图各模糊两遍(1-2-1,横竖各一次)—— 生长按栅格格子走,放大后边上一格一格的台阶磨成圆滑的曲线
+        {
+          const tmpB = tmp;
+          const blur121 = (a: Float32Array) => {
+            for (let pass = 0; pass < 2; pass++) {
+              for (let y = 0; y < RH; y++) {
+                const row = y * RW;
+                for (let x = 0; x < RW; x++) tmpB[row + x] = 0.25 * a[row + ((x - 1 + RW) % RW)] + 0.5 * a[row + x] + 0.25 * a[row + ((x + 1) % RW)];
+              }
+              for (let y = 0; y < RH; y++) {
+                const u = Math.max(0, y - 1) * RW,
+                  dn = Math.min(RH - 1, y + 1) * RW,
+                  row = y * RW;
+                for (let x = 0; x < RW; x++) a[row + x] = 0.25 * tmpB[u + x] + 0.5 * tmpB[row + x] + 0.25 * tmpB[dn + x];
+              }
+            }
+          };
+          blur121(mThr);
+          blur121(mOld!);
+          blur121(mCore!);
         }
       }
       const mT = mThr!,
@@ -588,6 +659,50 @@ export function CityLayer({ civ, world, raster, toClient, urban, night, hidden }
             }
           }
         }
+        if (!night && !arable) {
+          arable = new Float32Array(RW * RH);
+          for (let i = 0; i < RW * RH; i++) {
+            if (raster.water[i]) continue;
+            const tw = Math.min(1, Math.max(0, (raster.temp[i] + 2) / 8));
+            const pw = Math.min(1, Math.max(0, (raster.precip[i] - 200) / 250));
+            const sw = Math.max(0, 1 - steepArr![i] / 0.3);
+            arable[i] = tw * pw * sw;
+          }
+        }
+        // 第七十二轮:农田强度 = 能不能种 × 乡村人口(按末年标尺),模糊两遍(地块的多边形边看不出来)
+        if (!night) {
+          if (!farmI) {
+            farmI = new Float32Array(RW * RH);
+            farmT = new Float32Array(RW * RH);
+          }
+          const F = farmI,
+            T = farmT!;
+          for (let i = 0; i < RW * RH; i++) {
+            const cell = raster.cell[i];
+            F[i] = raster.water[i] || cell < 0 ? 0 : arable![i] * (1 - Math.exp((-1.2 * field[cell]) / farmRef!));
+          }
+          const rad = 3,
+            kk = 1 / (2 * rad + 1);
+          for (let pass = 0; pass < 2; pass++) {
+            for (let y = 0; y < RH; y++) {
+              const row = y * RW;
+              let sm = 0;
+              for (let j = -rad; j <= rad; j++) sm += F[row + ((j + RW) % RW)];
+              for (let x = 0; x < RW; x++) {
+                T[row + x] = sm * kk;
+                sm += F[row + ((x + rad + 1) % RW)] - F[row + ((x - rad + RW) % RW)];
+              }
+            }
+            for (let x = 0; x < RW; x++) {
+              let sm = 0;
+              for (let j = -rad; j <= rad; j++) sm += T[Math.min(RH - 1, Math.max(0, j)) * RW + x];
+              for (let y = 0; y < RH; y++) {
+                F[y * RW + x] = sm * kk;
+                sm += T[Math.min(RH - 1, y + rad + 1) * RW + x] - T[Math.max(0, y - rad) * RW + x];
+              }
+            }
+          }
+        }
       }
       for (let y = 0; y < TH; y++) {
         const ry = (y / k2) | 0;
@@ -595,7 +710,7 @@ export function CityLayer({ civ, world, raster, toClient, urban, night, hidden }
           const ri = ry * RW + ((x / k2) | 0);
           if (raster.water[ri]) continue;
           // 白天:离建成区还远的格子,这一格对应的几列贴图像素一起跳过
-          if (!night && mThr![ri] <= -4) {
+          if (!night && mThr![ri] <= -8 && !(farmI![ri] > 0.01)) {
             x += k2 - 1 - (x % k2);
             continue;
           }
@@ -611,7 +726,8 @@ export function CityLayer({ civ, world, raster, toClient, urban, night, hidden }
           // 只在边界带里(余量绝对值 ≤ 4)插值;离边界远的直接用本格的值(省时间)
           const t0 = mT[ri];
           if (t0 > -4) {
-            const jit = ((nzThr![q] - 1) / 254 - 0.5) * 0.8;
+            // 边上的细碎起伏(第六十九轮加大:边缘不是光滑的弧)
+            const jit = ((nzThr![q] - 1) / 254 - 0.5) * 1.6;
             mt = (t0 > 4 ? t0 : bil(mT, x, y)) + jit;
             if (mt > 0) {
               built = true;
@@ -623,50 +739,69 @@ export function CityLayer({ civ, world, raster, toClient, urban, night, hidden }
           }
           const o = q * 4;
           if (!night) {
-            if (!built) continue;
-            const g = (0.96 + 0.08 * ph(x + 31, y + 7)) * shadeArr![ri];
-            let cr: number, cg: number, cb: number;
-            if (zone === 2) {
-              // 市中心:中性的深水泥灰
-              // 市中心:偏冷的深灰(和郊区拉开)
-              cr = 84;
-              cg = 87;
-              cb = 94;
-            } else if (zone === 1) {
-              // 老城:灰褐,建得满
-              cr = 118;
-              cg = 110;
-              cb = 99;
-            } else {
-              // 郊区:成块的绿地空出来;零星深色工业区;越往外越浅
-              if (nzFlag![q] & 1) continue;
-              const t = Math.min(1, Math.max(0, mt / Math.max(1e-3, mt - mo)));
-              if (nzFlag![q] & 2) {
-                cr = 86;
-                cg = 84;
-                cb = 82;
-              } else {
-                // 郊区:浅、偏暖;越靠老城越深
-                cr = 162 - 26 * t;
-                cg = 153 - 24 * t;
-                cb = 134 - 20 * t;
-              }
+            // 第七十二轮:城市化强度 sc —— 生长余量上很宽的平滑坡(外 5 格起、里 3 格到顶),边上一点成片的起伏
+            const jit2 = ((nzThr![q] - 1) / 254 - 0.5) * 1.2;
+            const mtD = mT[ri] > -8 ? bil(mT, x, y) + jit2 : -50;
+            let sc = 0,
+              core = 0,
+              old = 0;
+            if (mtD > -5) {
+              const u0 = Math.min(1, (mtD + 5) / 8);
+              sc = u0 * u0 * (3 - 2 * u0);
+              const cu = Math.min(1, Math.max(0, (bil(mC, x, y) + jit2 + 1.5) / 4));
+              const ou = Math.min(1, Math.max(0, (bil(mO, x, y) + jit2 + 1.5) / 4));
+              core = cu * cu * (3 - 2 * cu);
+              old = ou * ou * (3 - 2 * ou);
+              if (core < 0.5 && nzFlag![q] & 1) sc *= 0.6; // 郊区里成片的绿地
+              sc *= 1 - 0.75 * Math.min(1, bil(steepArr!, x, y) / 0.35); // 城铺平原、河谷;山坡上留原色
             }
-            // 第六十八轮:挨过核打击的城 —— 炭黑夹灰烬的废墟,零星露出地面;越近市中心越重,几十年里重建回来
-            const rn = ruinOf[ow] * (zone === 2 ? 1 : zone === 1 ? 0.9 : 0.75);
+            const sf = farmI ? Math.min(1, bil(farmI, x, y)) * (1 - sc) : 0;
+            if (sc < 0.01 && sf < 0.01) continue;
+            // 城的颜色(只取色相、饱和度)和明暗(128 = 不变)
+            const ind = nzFlag![q] & 2 && core < 0.5;
+            let cr = 146 - 6 * core,
+              cg = 143 - 5 * core,
+              cb = 137 - 2 * core;
+            if (ind) {
+              cr = cg = 134;
+              cb = 130;
+            }
+            let Lc = 128 + 50 - 6 * old - 14 * core + (ind ? 6 : 0);
+            // 第六十八轮:挨过核打击的城 —— 炭黑夹灰烬;越近市中心越重,几十年里重建回来
+            const rn = mtD > 0 ? ruinOf[ow] * (0.75 + 0.25 * Math.max(core, old)) : 0;
             if (rn > 0.03) {
-              if (ph(x + 211, y + 97) < rn * 0.3) continue;
               const ash = ph(x * 7 + 3, y * 5 + 1) < 0.35;
-              const [rr, rg, rb] = ash ? [150, 144, 136] : [44, 39, 35];
-              cr += (rr - cr) * rn;
-              cg += (rg - cg) * rn;
-              cb += (rb - cb) * rn;
+              cr += (122 - cr) * rn;
+              cg += (118 - cg) * rn;
+              cb += (114 - cb) * rn;
+              Lc += ((ash ? 150 : 40) - Lc) * rn;
+              sc = Math.max(sc, rn);
             }
-            d[o] = cr * g;
-            d[o + 1] = cg * g;
-            d[o + 2] = cb * g;
-            // 不透明(半透明透出底下的绿色,像地面发霉)
-            d[o + 3] = 255;
+            // 农田:按干湿往黄褐(干)/ 橄榄(湿)偏,略亮
+            const wet = Math.min(1, Math.max(0, (raster.precip[ri] - 450) / 600));
+            const fr = 178 - 70 * wet,
+              fg = 158 - 18 * wet,
+              fb = 96 - 34 * wet;
+            const Lf = 146;
+            const ac = sc * (0.86 + 0.1 * Math.max(core, old)),
+              af = 0.7 * sf,
+              A = 1 - (1 - ac) * (1 - af),
+              wc = ac / Math.max(1e-6, ac + af * (1 - ac));
+            const L = 128 + (Lc - 128) * sc + (Lf - 128) * sf;
+            // 颜色贴图:色相、饱和度用混合色;亮度顺手存成 L(平面图 color 混合不看亮度;地球仪靠它取明暗)
+            let r0 = cr * wc + fr * (1 - wc),
+              g0 = cg * wc + fg * (1 - wc),
+              b0 = cb * wc + fb * (1 - wc);
+            const lum0 = 0.3 * r0 + 0.59 * g0 + 0.11 * b0;
+            r0 += L - lum0;
+            g0 += L - lum0;
+            b0 += L - lum0;
+            d[o] = r0;
+            d[o + 1] = g0;
+            d[o + 2] = b0;
+            d[o + 3] = 255 * A;
+            ld[o] = ld[o + 1] = ld[o + 2] = L;
+            ld[o + 3] = 255;
             continue;
           }
           // 夜里:建成区就是亮区(城心偏白);外面是乡下的零星暗灯
@@ -677,11 +812,12 @@ export function CityLayer({ civ, world, raster, toClient, urban, night, hidden }
           const lit = winter || dark.has(cell) || (built && ruinOf[ow] > 0.35) ? 0.03 : (0.06 + 0.94 * e) * (built ? 1 - 0.8 * ruinOf[ow] : 1);
           let b: number, w: number;
           if (built) {
-            if (ph(x, y) >= (zone === 2 ? 0.97 : zone === 1 ? 0.9 : 0.8)) continue;
+            // 第六十九轮:边缘的灯渐稀
+            if (ph(x, y) >= (zone === 2 ? 0.97 : zone === 1 ? 0.9 : 0.8) * Math.min(1, 0.2 + mt / 2)) continue;
             b = lit * (zone === 2 ? 1 : zone === 1 ? 0.85 : 0.65) * (0.75 + 0.5 * ph(x + 7, y + 3));
             w = zone === 2 ? 0.85 : zone === 1 ? 0.5 : 0.15;
           } else {
-            if (u < 0.02 || ph(x, y) >= Math.min(1, u * u * 1.6 + u * 0.25) * 0.35) continue;
+            if (u < 0.02 || ph(x, y) >= Math.min(1, u * u * 1.6 + u * 0.25) * 0.5) continue;
             b = lit * 0.35 * (0.4 + 0.6 * u) * (0.7 + 0.6 * ph(x + 7, y + 3));
             w = 0;
           }
@@ -738,6 +874,8 @@ export function CityLayer({ civ, world, raster, toClient, urban, night, hidden }
       }
       tg.putImageData(img, 0, 0);
       texMDirty = true;
+      if (limg) lg.putImageData(limg, 0, 0);
+      else lg.clearRect(0, 0, TW, TH);
       // 光晕:缩小 8 倍的一份,显示时平滑放大、淡淡叠上
       gg.clearRect(0, 0, glow.width, glow.height);
       gg.imageSmoothingEnabled = true;
@@ -766,6 +904,8 @@ export function CityLayer({ civ, world, raster, toClient, urban, night, hidden }
         texKey = tk;
         // 城区换了:城区上面的河要按新城区重画
         rvForce = true;
+        // 第六十九轮:地球仪上贴图交给球画(白天用挖过河道的那份)
+        if (globe) setGlobeCity(night ? tex : maskedTex(), night ? 2 : 1);
       }
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       if (cv.width !== Math.round(rect.width * dpr) || cv.height !== Math.round(rect.height * dpr)) {
@@ -774,7 +914,7 @@ export function CityLayer({ civ, world, raster, toClient, urban, night, hidden }
       }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, rect.width, rect.height);
-      if (night) {
+      if (night && !globe) {
         // 深蓝黑:陆地、海岸在"月光"下还隐约看得见
         ctx.fillStyle = 'rgba(3,7,20,0.8)';
         ctx.fillRect(0, 0, rect.width, rect.height);
@@ -815,7 +955,7 @@ export function CityLayer({ civ, world, raster, toClient, urban, night, hidden }
           pts.push(q ? [q[0] - rect.left, q[1] - rect.top] : null);
         }
       /** 图上三点 → 屏上三点的仿射,贴一个三角(稍微外扩半像素,拼缝看不出) */
-      const tri = (img: HTMLCanvasElement, a: [number, number], b: [number, number], cc: [number, number], ua: [number, number], ub: [number, number], uc: [number, number], smooth: boolean) => {
+      const tri = (img: HTMLCanvasElement, a: [number, number], b: [number, number], cc: [number, number], ua: [number, number], ub: [number, number], uc: [number, number], smooth: boolean, g2: CanvasRenderingContext2D = ctx) => {
         const sw = img.width,
           sh = img.height;
         const x0 = ua[0] * sw,
@@ -844,27 +984,27 @@ export function CityLayer({ civ, world, raster, toClient, urban, night, hidden }
         const A = grow(a),
           B = grow(b),
           Cc = grow(cc);
-        ctx.save();
-        ctx.beginPath();
-        ctx.moveTo(A[0], A[1]);
-        ctx.lineTo(B[0], B[1]);
-        ctx.lineTo(Cc[0], Cc[1]);
-        ctx.closePath();
-        ctx.clip();
-        ctx.transform(m11, m21, m12, m22, dx, dy);
-        ctx.imageSmoothingEnabled = smooth;
-        ctx.drawImage(img, 0, 0);
-        ctx.restore();
+        g2.save();
+        g2.beginPath();
+        g2.moveTo(A[0], A[1]);
+        g2.lineTo(B[0], B[1]);
+        g2.lineTo(Cc[0], Cc[1]);
+        g2.closePath();
+        g2.clip();
+        g2.transform(m11, m21, m12, m22, dx, dy);
+        g2.imageSmoothingEnabled = smooth;
+        g2.drawImage(img, 0, 0);
+        g2.restore();
       };
-      const draw = (img: HTMLCanvasElement, smooth: boolean) => {
+      const draw = (img: HTMLCanvasElement, smooth: boolean, g2: CanvasRenderingContext2D = ctx) => {
         if (affine) {
           const { ox, oy, kx, ky } = affine;
           const ww = kx * W;
-          ctx.imageSmoothingEnabled = smooth;
+          g2.imageSmoothingEnabled = smooth;
           for (let k = -2; k <= 2; k++) {
             const x0 = ox + k * ww;
             if (x0 > rect.width || x0 + ww < 0) continue;
-            ctx.drawImage(img, x0, oy, ww, ky * H);
+            g2.drawImage(img, x0, oy, ww, ky * H);
           }
           return;
         }
@@ -885,11 +1025,11 @@ export function CityLayer({ civ, world, raster, toClient, urban, night, hidden }
               u1 = (i + 1) / GX,
               v0 = j / GY,
               v1 = (j + 1) / GY;
-            tri(img, p00, p10, p01, [u0, v0], [u1, v0], [u0, v1], smooth);
-            tri(img, p10, p11, p01, [u1, v0], [u1, v1], [u0, v1], smooth);
+            tri(img, p00, p10, p01, [u0, v0], [u1, v0], [u0, v1], smooth, g2);
+            tri(img, p10, p11, p01, [u1, v0], [u1, v1], [u0, v1], smooth, g2);
           }
       };
-      if (night) {
+      if (night && !globe) {
         ctx.globalCompositeOperation = 'lighter';
         // 光晕越放大越淡(近看要的是一粒粒的灯,不是一团光)
         const a0 = pts[(GY >> 1) * (GX + 1) + (GX >> 1)],
@@ -900,59 +1040,63 @@ export function CityLayer({ civ, world, raster, toClient, urban, night, hidden }
         ctx.globalAlpha = 1;
       }
       // 白天的城区是平滑色块:放大时插值(不出台阶);夜里的灯不插值(一粒粒)
-      draw(!night && !affine ? maskedTex() : tex, !night);
-      // 第六十二轮:河画在城区上面(好比城区插在地形和河之间)—— 平面图上按地图当前的视口、缩放(window.__wfView.k),
-      // 用卫星底图同一个画河的函数(放大后连小溪)重画一遍,只留落在城区上的那部分;河宽、条数、河岸、河口都和底图一样
-      if (!night && affine) {
-        const dprR = cv.width / rect.width;
-        if (!rv) rv = document.createElement('canvas');
-        if (rv.width !== cv.width || rv.height !== cv.height) {
-          rv.width = cv.width;
-          rv.height = cv.height;
-        }
-        const rg = rv.getContext('2d')!;
-        const vs = affine.kx * dprR,
-          vox = affine.ox * dprR,
-          voy = affine.oy * dprR;
-        // 拖动(缩放没变):把上一张跟着平移,不重画(重画一次河网要几十毫秒);停下 150 毫秒后补画一次(新露出来的地方)
-        if (!rvForce && Math.abs(vs - rvView.s) < 1e-9 && rvView.s > 0) {
-          ctx.save();
-          ctx.setTransform(1, 0, 0, 1, 0, 0);
-          ctx.drawImage(rv, vox - rvView.ox, voy - rvView.oy);
-          ctx.restore();
-          if (vox !== rvView.ox || voy !== rvView.oy) {
-            clearTimeout(rvTimer);
-            rvTimer = window.setTimeout(() => {
-              rvForce = true;
-              sig = '';
-            }, 150);
+      // 第七十二轮:白天 —— ccanvas 按 soft-light 调明暗(加细颗粒),tcanvas 按 color 换色相饱和度;都不盖住底图
+      {
+        const cc = ccanvas.current,
+          tcv = tcanvas.current;
+        const cctx = cc?.getContext('2d'),
+          tctx = tcv?.getContext('2d');
+        if (cc && cctx && tcv && tctx) {
+          for (const c2 of [cc, tcv])
+            if (c2.width !== cv.width || c2.height !== cv.height) {
+              c2.width = cv.width;
+              c2.height = cv.height;
+            }
+          for (const g2 of [cctx, tctx]) {
+            g2.setTransform(dpr, 0, 0, dpr, 0, 0);
+            g2.clearRect(0, 0, rect.width, rect.height);
           }
-        } else
-        try {
-          rvForce = false;
-          rvView = { s: vs, ox: vox, oy: voy };
-          rg.setTransform(1, 0, 0, 1, 0, 0);
-          rg.globalCompositeOperation = 'source-over';
-          rg.clearRect(0, 0, rv.width, rv.height);
-          const vk = (window as unknown as { __wfView?: { k?: number } }).__wfView?.k ?? 1;
-          drawRealisticRivers(rg, world, raster, { s: vs, ox: vox, oy: voy, k: vk, wrap: world.width }, true);
-          rg.globalCompositeOperation = 'destination-in';
-          rg.imageSmoothingEnabled = true;
-          const ww = affine.kx * W * dprR;
-          for (let k = -2; k <= 2; k++) {
-            const x0 = affine.ox * dprR + k * ww;
-            if (x0 > rv.width || x0 + ww < 0) continue;
-            rg.drawImage(tex, x0, affine.oy * dprR, ww, affine.ky * H * dprR);
+          if (!night && !globe) {
+            const mt2 = maskedTex();
+            draw(mt2, true, tctx);
+            draw(ltex, true, cctx);
+            // 颗粒:只在城、田上(按颜色贴图的不透明度),图案跟着地图平移
+            if (!gcv) gcv = document.createElement('canvas');
+            if (gcv.width !== cv.width || gcv.height !== cv.height) {
+              gcv.width = cv.width;
+              gcv.height = cv.height;
+            }
+            const gx = gcv.getContext('2d')!;
+            gx.setTransform(1, 0, 0, 1, 0, 0);
+            gx.globalCompositeOperation = 'source-over';
+            gx.clearRect(0, 0, gcv.width, gcv.height);
+            const pat = gx.createPattern(grain, 'repeat');
+            if (pat) {
+              const ox = affine ? Math.round(affine.ox * dpr) : 0,
+                oy = affine ? Math.round(affine.oy * dpr) : 0;
+              gx.save();
+              gx.translate(ox % 128, oy % 128);
+              gx.fillStyle = pat;
+              gx.fillRect(-128, -128, gcv.width + 256, gcv.height + 256);
+              gx.restore();
+              gx.setTransform(dpr, 0, 0, dpr, 0, 0);
+              gx.globalCompositeOperation = 'destination-in';
+              draw(mt2, true, gx);
+              gx.setTransform(1, 0, 0, 1, 0, 0);
+              cctx.save();
+              cctx.setTransform(1, 0, 0, 1, 0, 0);
+              cctx.globalCompositeOperation = 'soft-light';
+              cctx.globalAlpha = 0.5;
+              cctx.drawImage(gcv, 0, 0);
+              cctx.restore();
+            }
           }
-          rg.globalCompositeOperation = 'source-over';
-          ctx.save();
-          ctx.setTransform(1, 0, 0, 1, 0, 0);
-          ctx.drawImage(rv, 0, 0);
-          ctx.restore();
-        } catch {
-          // 画不出来就算了(城区里照旧按河道蒙版空出来)
         }
       }
+      if (!globe && night) draw(tex, false);
+      // 第六十二轮:河画在城区上面(好比城区插在地形和河之间)—— 平面图上按地图当前的视口、缩放(window.__wfView.k),
+      // 用卫星底图同一个画河的函数(放大后连小溪)重画一遍,只留落在城区上的那部分;河宽、条数、河岸、河口都和底图一样
+      // 第七十二轮:城区不再盖住底图,原来"城区上面重画河"那一步去掉了(底图的河本来就在)
       // ---- 放大以后:城里的街道(从城心、进城的路长出来;夜里灯沿街排,白天淡淡的街道线)----
       const q0 = tc(world.width * 0.5, world.height * 0.5),
         q1 = tc(world.width * 0.5 + sp, world.height * 0.5);
@@ -1055,8 +1199,15 @@ export function CityLayer({ civ, world, raster, toClient, urban, night, hidden }
     return () => {
       cancelAnimationFrame(raf);
       clearTimeout(rvTimer);
+      if (globe) setGlobeCity(null, 0);
     };
-  }, [show, data, world, raster, toClient, urban, night]);
+  }, [show, data, world, raster, toClient, urban, night, globe]);
   if (!show) return null;
-  return <canvas ref={canvas} className="wonder-layer" aria-hidden="true" />;
+  return (
+    <>
+      <canvas ref={ccanvas} className="wonder-layer" aria-hidden="true" style={!globe && !night ? { mixBlendMode: 'soft-light' } : undefined} />
+      <canvas ref={tcanvas} className="wonder-layer" aria-hidden="true" style={!globe && !night ? { mixBlendMode: 'color' } : undefined} />
+      <canvas ref={canvas} className="wonder-layer" aria-hidden="true" />
+    </>
+  );
 }

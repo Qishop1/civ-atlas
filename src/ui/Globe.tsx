@@ -39,6 +39,7 @@
  * 开关就是"投影"切换里的 globe(ui/projection.ts;"图层与投影"弹层的投影、地图右下角的"地球仪 / 平面地图"按钮都改它,网址 proj=globe,旧的 view=globe 也认);
  * 经纬网和平面投影共用一个开关;中心经度和 mapWrap.ts 的中心互通(打开时从当前中心转起,停下来就记下正对着的经度)。
  */
+import { globeCity, subscribeGlobeCity } from './globeCity';
 import { enterSystemView } from './spaceStore';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import type { World } from '../gen/world';
@@ -934,6 +935,8 @@ export function Globe({ world, raster, civ, geo, style, layer, look = 'classic',
     },
     /** 云飘动时只重画显卡那一层(不动文字和矢量线):上一帧的画法参数、下一次重画的时刻、最后一次有人操作的时刻、重画的定时循环 */
     lastGl: null as { cw: number; ch: number; dpr: number; look: GlobeLook } | null,
+    /** 第六十九轮:换进槽位 city 的是第几版城区贴图(ui/globeCity.ts) */
+    cityVer: -1,
     driftAt: 0,
     lastInput: 0,
     driftRaf: 0,
@@ -953,6 +956,8 @@ export function Globe({ world, raster, civ, geo, style, layer, look = 'classic',
   const invalidate = () => {
     if (!s.raf) s.raf = requestAnimationFrame(tick);
   };
+  // 第六十九轮:城区贴图换了就重画
+  useEffect(() => subscribeGlobeCity(invalidate), []);
 
   // ---- 云(写实风) ----
   /** 云层比地面多转的速度:一圈约 25 分钟,肉眼看是缓缓漂移 */
@@ -1643,6 +1648,12 @@ export function Globe({ world, raster, civ, geo, style, layer, look = 'classic',
     const busy = !!(s.drag || s.fly || s.inertia || s.pinch || s.shiftAnim) || now - s.wheelAt < SETTLE_MS;
     if (cloudStep(now, busy)) more = true;
     look.clouds = cloudLook(busy);
+    // 第六十九轮:城区贴图有新的就换进槽位 city
+    if (s.gl && s.cityVer !== globeCity.ver) {
+      s.gl.upload('city', globeCity.src);
+      s.cityVer = globeCity.ver;
+    }
+    look.city = globeCity.mode;
     /** CPU 画法:这一帧换上了后台画好的底图;还在等后台画现在这个视角的(上面那层先不动,和屏幕上的底图对齐) */
     let presented = false;
     let cpuWait = false;
@@ -2306,7 +2317,7 @@ export function Globe({ world, raster, civ, geo, style, layer, look = 'classic',
       out.width = W;
       out.height = H;
       const octx = out.getContext('2d')!;
-      const look: GlobeLook = { style: p.style, relief: s.relief, weights: reliefWeights(p.look), graticule: p.graticule, hl: 0, replay: s.replayMix, clouds: cloudLook() };
+      const look: GlobeLook = { style: p.style, relief: s.relief, weights: reliefWeights(p.look), graticule: p.graticule, hl: 0, replay: s.replayMix, clouds: cloudLook(), city: globeCity.mode };
       if (s.gl) {
         const ow = cvs.width;
         const oh = cvs.height;

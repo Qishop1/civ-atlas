@@ -314,6 +314,8 @@ export interface GlobeLook {
    * t = 秒(边缘细碎的形状慢慢变);detail = 边缘细碎程度 0–1(0 = 不加,省一轮噪声:手机上转动时关掉)。云图在槽位 cloud(render/clouds.ts)
    */
   clouds?: { opacity: number; rot: number; t: number; detail: number };
+  /** 本地分支 modern-pace 第六十九轮:城区贴图(槽位 city,ui/globeCity.ts):0 不画、1 白天(叠在地形上)、2 夜景(压暗 + 发光) */
+  city?: number;
 }
 
 /** 背景色(导出、CPU 画法、CSS 共用) */
@@ -356,6 +358,8 @@ uniform sampler2D uReplayTex;
 uniform sampler2D uWater;
 uniform sampler2D uSlope;
 uniform sampler2D uCloud;
+uniform sampler2D uCity;
+uniform float uCityMode;
 // 云:x 浓淡(0 = 不画)、y 云层比地面多转的角度、z 秒、w 边缘细碎程度
 uniform vec4 uCloudP;
 uniform float uRelief;
@@ -550,6 +554,26 @@ void main() {
       vec4 e = textureGrad(uSlope, st, gx, gy) * 2.0 - 1.0;
       c = relief(c, sign(e) * e * e * SLOPE_MAX, textureGrad(uWater, st, gx, gy).r, p, lon, lat);
     }
+    // 第六十九轮:城区(白天)叠在地形上、文明色块下面,之后照样被云盖、跟着昼夜明暗
+    vec4 cityTex = uCityMode > 0.5 ? textureGrad(uCity, st, gx, gy) : vec4(0.0);
+    if (uCityMode > 0.5 && uCityMode < 1.5 && cityTex.a > 0.002) {
+      // 第七十二轮:城区 / 农田改地表色调(和平面图一样):color 混合(色相饱和度用贴图的、亮度用地表的)→ soft-light 调明暗(贴图色的亮度)+ 细颗粒
+      float ca = cityTex.a;
+      vec3 ch = cityTex.rgb / ca;
+      float Lt = dot(ch, vec3(0.3, 0.59, 0.11));
+      vec3 cc = ch + (dot(c, vec3(0.3, 0.59, 0.11)) - Lt);
+      float l = dot(cc, vec3(0.3, 0.59, 0.11));
+      float n0 = min(min(cc.r, cc.g), cc.b);
+      float x0 = max(max(cc.r, cc.g), cc.b);
+      if (n0 < 0.0) cc = l + (cc - l) * l / max(l - n0, 1e-4);
+      if (x0 > 1.0) cc = l + (cc - l) * (1.0 - l) / max(x0 - l, 1e-4);
+      c = mix(c, cc, ca);
+      float gr = fract(sin(dot(floor(gl_FragCoord.xy * 0.5), vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
+      float Ls = clamp(mix(0.5, Lt, min(1.0, ca * 4.0)) + gr * 0.07 * ca, 0.0, 1.0);
+      vec3 D = mix(sqrt(c), ((16.0 * c - 12.0) * c + 4.0) * c, step(c, vec3(0.25)));
+      c = Ls <= 0.5 ? c - (1.0 - 2.0 * Ls) * c * (1.0 - c) : c + (2.0 * Ls - 1.0) * (D - c);
+    }
+    float cloudA = 0.0;
     vec4 cv = textureGrad(uCiv, st, gx, gy);
     c = c * (1.0 - cv.a) + cv.rgb;
     vec4 sv = textureGrad(uSel, st, gx, gy);
@@ -586,6 +610,7 @@ void main() {
         vec3 cc = mix(vec3(0.97, 0.98, 1.0) * shade, vec3(1.0, 0.70, 0.48), warm * 0.55);
         ca = clamp(edge * (0.5 + 0.5 * thick) * (0.92 + 0.08 * rim), 0.0, 0.97) * uCloudP.x;
         c = mix(c, cc, ca);
+        cloudA = ca;
       }
       // 背光面压暗(最暗约两成),分界线是一条渐变
       c *= 0.2 + 0.82 * lit;
@@ -607,6 +632,8 @@ void main() {
       c = mix(c, vec3(0.62, 0.66, 0.72), pow(rim, 3.0) * 0.35);
     }
 
+    // 第六十九轮:夜景 —— 球整体压暗(像月光下),城区的灯按发光叠上去,云下面暗一些
+    if (uCityMode > 1.5) c = c * 0.2 + cityTex.rgb * (1.0 - 0.75 * cloudA);
     if (uGrid > 0.5) {
       float stp = uGridStep;
       float dl = abs(fract(lon / stp + 0.5) - 0.5) * stp;
@@ -649,10 +676,11 @@ void main() {
 const ANISO = 48;
 
 /** 贴图的槽位 */
-export type GlobeSlot = 'terrain' | 'civ' | 'sel' | 'hl' | 'replay' | 'water' | 'slope' | 'cloud';
-const SLOTS: GlobeSlot[] = ['terrain', 'civ', 'sel', 'hl', 'replay', 'water', 'slope', 'cloud'];
+export type GlobeSlot = 'terrain' | 'civ' | 'sel' | 'hl' | 'replay' | 'water' | 'slope' | 'cloud' | 'city';
+const SLOTS: GlobeSlot[] = ['terrain', 'civ', 'sel', 'hl', 'replay', 'water', 'slope', 'cloud', 'city'];
 const UNIFORM_OF: Record<GlobeSlot, string> = {
   terrain: 'uTerrain',
+  city: 'uCity',
   civ: 'uCiv',
   sel: 'uSel',
   hl: 'uHlTex',
@@ -838,6 +866,7 @@ export class GlobeGL {
     gl.uniform1f(this.u('uGridStep'), ((look.graticule || 30) * PI) / 180);
     gl.uniform1f(this.u('uHl'), look.hl);
     gl.uniform1f(this.u('uReplay'), look.replay);
+    gl.uniform1f(this.u('uCityMode'), look.city ?? 0);
     gl.uniform1f(this.u('uRelief'), look.relief && look.style === 'realistic' ? 1 : 0);
     const wt = look.weights ?? reliefWeights();
     gl.uniform4f(this.u('uReliefW'), wt.detail, wt.macro, wt.sea, wt.shadow);

@@ -257,7 +257,7 @@ function SystemBody({ civ, terrain, entry }: { civ: Civ; terrain: () => HTMLCanv
       g.fillStyle = 'rgba(255,255,255,0.55)';
       if (GL) {
         const stx = skyTexture(seed);
-        if (stx) GL.skyTex(cam, stx, 0.4);
+        if (stx) GL.skyTex(cam, stx, 0.55);
         GL.sky(cam, skyData, 1);
       }
       else for (let k = 0; k < 220; k++) {

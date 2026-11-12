@@ -683,14 +683,17 @@ export function skyTex(seed: number, w = 1024): Tex {
       const X = cl * Math.cos(lon), Y = cl * Math.sin(lon);
       const b = Math.asin(Math.max(-1, Math.min(1, X * n[0] + Y * n[1] + Z * n[2])));
       const l = Math.atan2(X * e2[0] + Y * e2[1] + Z * e2[2], X * e1[0] + Y * e1[1] + Z * e1[2]);
-      const bulge = Math.exp(-(l * l) / (2 * 0.42 * 0.42));
+      // 第六十九轮:核球收窄(σ 24° → 14°),亮度集中
+      const bulge = Math.exp(-(l * l) / (2 * 0.25 * 0.25));
       // 带宽:沿着带慢慢变 + 核球那边鼓起来
       const cx = Math.cos(l), sx = Math.sin(l);
       const wid = 0.07 * (0.7 + 0.7 * nA(cx * 1.6 + 3, sx * 1.6 + 3, 0.5)) + 0.13 * bulge;
       const core = Math.exp(-((b / wid) * (b / wid)));
       // 光雾很平:只有轻微的浓淡(颗粒感交给沿带的暗星,贴图分辨率画不出一颗颗的星)
       // 核球那段亮得多(人马座方向是全天最亮的一块)
-      let I = core * (0.75 + 0.35 * fbm(nB, X, Y, Z, 4)) * (1 + 2.2 * bulge);
+      let I = core * (0.75 + 0.35 * fbm(nB, X, Y, Z, 4)) * (1 + 3.2 * bulge);
+      // 第六十九轮:银芯中间一团更亮、更暖的核(人马座那一团)
+      I += 3.2 * Math.exp(-((l * l) / (2 * 0.1 * 0.1) + (b * b) / (2 * 0.065 * 0.065))) * (0.85 + 0.3 * fbm(nB, X + 7, Y + 7, Z + 7, 6));
       // 暗尘:顺着带拉长的细丝(带坐标里经向拉长取噪声,取"脊线"),中线附近、核球那段最多
       const fil = (k: number, o: number) => 1 - Math.abs(2 * nC(cx * k + o, sx * k + o, (b / wid) * 3.2 + o) - 1);
       const ridge = Math.max(fil(5, 0) * 0.75 + fil(11, 40) * 0.25, fil(7, 80) * 0.6 + fil(16, 120) * 0.4);
@@ -704,7 +707,8 @@ export function skyTex(seed: number, w = 1024): Tex {
       // 外面一层很淡的光
       I += 0.05 * Math.exp(-((b / (wid * 3.2)) * (b / (wid * 3.2))));
       // 软压缩(不硬截到 1):银盘中线 ≈ 0.32,银芯 ≈ 0.8
-      const k = Math.min(1, (0.368 * I) / (1 + 0.15 * I));
+      // 第六十九轮:银盘中线约 0.25(叠到画面上 × 0.55 ≈ 原来的亮度),银芯到 1
+      const k = Math.min(1, (0.27 * I) / (1 + 0.08 * I));
       const warm = Math.min(1, bulge * 1.3);
       const o = (y * w + x) * 4;
       px[o] = 255 * k * (0.82 + 0.18 * warm);

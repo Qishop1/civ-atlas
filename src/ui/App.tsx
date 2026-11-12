@@ -2701,7 +2701,7 @@ function AppBody({ fromHome }: { fromHome?: HomeStart }) {
           </div>
         )}
         {/* 地图上钉在事发地的事件标签;导播开着时播放经过的大事换成导播的圆环 + 名牌(Director.tsx),点编年史跳过去的照旧 */}
-        {data && world && globeOn && <CityLayer civ={draft || home ? null : civ} world={data.world} raster={data.raster} toClient={globeToClient} urban={style === 'realistic' && surface !== 'geo' && surface !== 'geoMute'} night={nightOn} hidden={replayOn} />}
+        {data && world && globeOn && <CityLayer globe civ={draft || home ? null : civ} world={data.world} raster={data.raster} toClient={globeToClient} urban={style === 'realistic' && surface !== 'geo' && surface !== 'geoMute'} night={nightOn} hidden={replayOn} />}
         {/* 第六十八轮:地球仪上的核痕(平面图的在文字层下面,见上) */}
         {data && world && globeOn && <NukeScarLayer civ={civ} world={data.world} raster={data.raster} toClient={globeToClient} globe={globeApi} hidden={replayOn} />}
         {data && world && <WonderLayer civ={civ} world={data.world} toClient={globeOn ? globeToClient : worldToClient} globe={globeOn ? globeApi : null} hidden={replayOn} />}

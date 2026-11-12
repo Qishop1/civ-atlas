@@ -235,7 +235,7 @@ export function SystemOrrery({ params, left, right = 0, onHome, onPickHome }: { 
       if (GL && C.level !== 'planet') {
         const sv = { f: of, r: or_, u: ou, foc: ofoc, cx, cy };
         const st0 = skyTexture(params.seed);
-        if (st0) GL.skyTex(sv, st0, 0.4);
+        if (st0) GL.skyTex(sv, st0, 0.55);
         GL.sky(sv, skyData, 1);
         GL.beltComp(sv, oeye, beltData, t, sys.frost, 0.42);
       }
@@ -335,7 +335,7 @@ export function SystemOrrery({ params, left, right = 0, onHome, onPickHome }: { 
         C.pTgt = look;
         const cam = makeCam(eye, look, b3, cx, cy, w, h);
         const st1 = skyTexture(params.seed);
-        if (GL && st1) GL.skyTex(cam, st1, 0.4);
+        if (GL && st1) GL.skyTex(cam, st1, 0.55);
         GL?.sky(cam, skyData, 1);
         const balls = [{ C: [0, 0, 0] as V3, R: fp.radius }, ...moonPos.map((mo) => ({ C: mo.p, R: mo.m.radius }))];
         // ---- 背景:恒星(真实方向;在画面外就在边上画箭头)----
