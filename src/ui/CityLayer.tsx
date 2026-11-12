@@ -745,8 +745,8 @@ export function CityLayer({ civ, world, raster, toClient, urban, night, hidden, 
             let sc = 0,
               core = 0,
               old = 0;
-            if (mtD > -5) {
-              const u0 = Math.min(1, (mtD + 5) / 8);
+            if (mtD > -3.5) {
+              const u0 = Math.min(1, (mtD + 3.5) / 6.5);
               sc = u0 * u0 * (3 - 2 * u0);
               const cu = Math.min(1, Math.max(0, (bil(mC, x, y) + jit2 + 1.5) / 4));
               const ou = Math.min(1, Math.max(0, (bil(mO, x, y) + jit2 + 1.5) / 4));
@@ -779,12 +779,12 @@ export function CityLayer({ civ, world, raster, toClient, urban, night, hidden, 
             }
             // 农田:按干湿往黄褐(干)/ 橄榄(湿)偏,略亮
             const wet = Math.min(1, Math.max(0, (raster.precip[ri] - 450) / 600));
-            const fr = 178 - 70 * wet,
-              fg = 158 - 18 * wet,
-              fb = 96 - 34 * wet;
-            const Lf = 146;
+            const fr = 188 - 90 * wet,
+              fg = 162 - 20 * wet,
+              fb = 92 - 34 * wet;
+            const Lf = 150;
             const ac = sc * (0.86 + 0.1 * Math.max(core, old)),
-              af = 0.7 * sf,
+              af = 0.85 * sf,
               A = 1 - (1 - ac) * (1 - af),
               wc = ac / Math.max(1e-6, ac + af * (1 - ac));
             const L = 128 + (Lc - 128) * sc + (Lf - 128) * sf;

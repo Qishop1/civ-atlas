@@ -22,3 +22,12 @@ export function subscribeGlobeCity(f: Listener): () => void {
     subs.delete(f);
   };
 }
+
+/** 第七十四轮:核痕贴图(槽位 scar;着色器里正片叠底)。null = 不画 */
+export const globeScar: { src: HTMLCanvasElement | null; ver: number } = { src: null, ver: 0 };
+
+export function setGlobeScar(src: HTMLCanvasElement | null): void {
+  globeScar.src = src;
+  globeScar.ver++;
+  subs.forEach((f) => f());
+}

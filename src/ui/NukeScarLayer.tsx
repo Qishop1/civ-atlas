@@ -23,6 +23,7 @@ import { worldToLonLat } from '../render/globe';
 import { getCivTime } from './civView';
 import type { WorldToClient } from './EventPins';
 import type { GlobeApi } from './Globe';
+import { setGlobeScar } from './globeCity';
 import './timeline.css';
 
 const R_KM = 6371;
@@ -60,7 +61,9 @@ export interface NukeScarLayerProps {
   raster?: Raster;
 }
 
-export function NukeScarLayer({ civ, world, toClient, hidden, raster }: NukeScarLayerProps) {
+export function NukeScarLayer({ civ, world, toClient, hidden, raster, globe }: NukeScarLayerProps) {
+  /** 第七十四轮:地球仪上 —— 画到经纬度贴图,交给球的着色器 */
+  const onGlobe = !!globe;
   const data = useMemo(() => {
     const scars: Scar[] = [];
     const winters: Winter[] = [];
@@ -135,31 +138,61 @@ export function NukeScarLayer({ civ, world, toClient, hidden, raster }: NukeScar
       return raster.water[iy * raster.w + Math.min(raster.w - 1, ix)] !== 0;
     };
     const kmW = world.width / (2 * Math.PI * R_KM);
+    // 第七十四轮:地球仪 —— 经纬度贴图(4096 × 2048),接缝左右各补画一份(shift = −1 / 0 / 1)
+    const GW = 4096,
+      GH = 2048;
+    let gt: HTMLCanvasElement | null = null;
+    let shift = 0;
     const frame = () => {
       raf = requestAnimationFrame(frame);
-      const cv = canvas.current;
-      const ctx = cv?.getContext('2d');
-      const tc = toClient.current;
-      if (!cv || !ctx || !tc) return;
-      const rect = cv.getBoundingClientRect();
-      const dpr = Math.min(2, window.devicePixelRatio || 1);
-      if (cv.width !== Math.round(rect.width * dpr) || cv.height !== Math.round(rect.height * dpr)) {
-        cv.width = Math.round(rect.width * dpr);
-        cv.height = Math.round(rect.height * dpr);
-      }
       const year = getCivTime().year ?? civ?.endYear ?? 0;
-      // 年份(播放时按 0.05 年)、视角变了才重画
-      const p0 = tc(world.width * 0.25, world.height * 0.5),
-        p1 = tc(world.width * 0.75, world.height * 0.3);
-      const sg = `${Math.round(year * 20)}|${p0?.map((v) => v.toFixed(1))}|${p1?.map((v) => v.toFixed(1))}|${rect.width}x${rect.height}`;
-      if (sg === sig) return;
-      sig = sg;
+      let cv: HTMLCanvasElement,
+        ctx: CanvasRenderingContext2D,
+        rect: { left: number; top: number; width: number; height: number },
+        dpr: number,
+        L: (wx: number, wy: number) => [number, number] | null;
+      const tc = toClient.current;
+      if (onGlobe) {
+        // 年份变了才重画(播放时按 0.25 年,停着按 0.05 年);和视角无关
+        const sg = `${Math.round(year * (getCivTime().playing ? 4 : 20))}`;
+        if (sg === sig) return;
+        sig = sg;
+        if (!gt) {
+          gt = document.createElement('canvas');
+          gt.width = GW;
+          gt.height = GH;
+        }
+        cv = gt;
+        ctx = gt.getContext('2d')!;
+        rect = { left: 0, top: 0, width: GW, height: GH };
+        dpr = 1;
+        L = (wx, wy) => [(wx / world.width + shift) * GW, (wy / world.height) * GH];
+      } else {
+        const cv0 = canvas.current;
+        const ctx0 = cv0?.getContext('2d');
+        if (!cv0 || !ctx0 || !tc) return;
+        cv = cv0;
+        ctx = ctx0;
+        rect = cv.getBoundingClientRect();
+        dpr = Math.min(2, window.devicePixelRatio || 1);
+        if (cv.width !== Math.round(rect.width * dpr) || cv.height !== Math.round(rect.height * dpr)) {
+          cv.width = Math.round(rect.width * dpr);
+          cv.height = Math.round(rect.height * dpr);
+        }
+        // 年份(播放时按 0.05 年)、视角变了才重画
+        const p0 = tc(world.width * 0.25, world.height * 0.5),
+          p1 = tc(world.width * 0.75, world.height * 0.3);
+        const sg = `${Math.round(year * 20)}|${p0?.map((v) => v.toFixed(1))}|${p1?.map((v) => v.toFixed(1))}|${rect.width}x${rect.height}`;
+        if (sg === sig) return;
+        sig = sg;
+        const r0 = rect;
+        L = (wx, wy) => {
+          const q = tc(wx, wy);
+          return q ? [q[0] - r0.left, q[1] - r0.top] : null;
+        };
+      }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, rect.width, rect.height);
-      const L = (wx: number, wy: number): [number, number] | null => {
-        const q = tc(wx, wy);
-        return q ? [q[0] - rect.left, q[1] - rect.top] : null;
-      };
       const h = (k: number, u: number) => {
         const v = Math.sin(k * 12.9898 + u * 78.233) * 43758.5453;
         return v - Math.floor(v);
@@ -186,7 +219,9 @@ export function NukeScarLayer({ civ, world, toClient, hidden, raster }: NukeScar
         ctx.arc(x, y, r, 0, Math.PI * 2);
         ctx.fill();
       };
+      for (const sh of onGlobe ? [-1, 0, 1] : [0])
       for (const sc of data.scars) {
+        shift = sh;
         const age = year - sc.year;
         if (age < 0) continue;
         const c0 = L(sc.wx, sc.wy);
@@ -254,8 +289,19 @@ export function NukeScarLayer({ civ, world, toClient, hidden, raster }: NukeScar
           ctx.fill();
         }
       }
+      shift = 0;
+      // 第七十四轮:地球仪贴图 —— 蒙版直接按贴图大小贴
+      const lmG = onGlobe ? landMask() : null;
+      if (lmG) {
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.globalCompositeOperation = 'destination-in';
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(lmG, 0, 0, GW, GH);
+        ctx.restore();
+      }
       // ---- 平面图:焦土、枯死带、烟带只留在陆地上(按底图的水陆图裁;核冬天的烟尘云在这之后画,海上也有)----
-      {
+      if (!onGlobe && tc) {
         const W = world.width,
           H = world.height;
         const c0 = tc(W * 0.5, H * 0.5),
@@ -291,7 +337,9 @@ export function NukeScarLayer({ civ, world, toClient, hidden, raster }: NukeScar
         }
       }
       // ---- 核冬天:一团团的烟尘云 —— 先在打核战的纬度带,几年里扩到全球、往东飘、变稀 ----
+      for (const sh of onGlobe ? [-1, 0, 1] : [0])
       for (const wi of data.winters) {
+        shift = sh;
         if (year < wi.from || year > wi.to + 2) continue;
         const dur = Math.max(1, wi.to - wi.from);
         const f = Math.min(1, (year - wi.from) / dur);
@@ -313,11 +361,16 @@ export function NukeScarLayer({ civ, world, toClient, hidden, raster }: NukeScar
           blob(q[0], q[1], rr, j % 3 ? '120,112,104' : '96,90,86', strength * (0.5 + 0.5 * h(j, 6)));
         }
       }
+      shift = 0;
+      if (onGlobe && gt) setGlobeScar(gt);
     };
     frame();
-    return () => cancelAnimationFrame(raf);
-  }, [show, data, world, toClient, civ]);
-  if (!show) return null;
+    return () => {
+      cancelAnimationFrame(raf);
+      if (onGlobe) setGlobeScar(null);
+    };
+  }, [show, data, world, toClient, civ, onGlobe]);
+  if (!show || onGlobe) return null;
   // 正片叠底:只让底图变暗、变褐(地面本身烧焦、枯死、被烟尘遮暗),不是盖一层颜色
   return <canvas ref={canvas} className="wonder-layer" aria-hidden="true" style={{ mixBlendMode: 'multiply' }} />;
 }

@@ -316,6 +316,8 @@ export interface GlobeLook {
   clouds?: { opacity: number; rot: number; t: number; detail: number };
   /** 本地分支 modern-pace 第六十九轮:城区贴图(槽位 city,ui/globeCity.ts):0 不画、1 白天(叠在地形上)、2 夜景(压暗 + 发光) */
   city?: number;
+  /** 第七十四轮:核痕贴图(槽位 scar,正片叠底):0 不画、1 画 */
+  scar?: number;
 }
 
 /** 背景色(导出、CPU 画法、CSS 共用) */
@@ -360,6 +362,8 @@ uniform sampler2D uSlope;
 uniform sampler2D uCloud;
 uniform sampler2D uCity;
 uniform float uCityMode;
+uniform sampler2D uScar;
+uniform float uScarOn;
 // 云:x 浓淡(0 = 不画)、y 云层比地面多转的角度、z 秒、w 边缘细碎程度
 uniform vec4 uCloudP;
 uniform float uRelief;
@@ -573,6 +577,11 @@ void main() {
       vec3 D = mix(sqrt(c), ((16.0 * c - 12.0) * c + 4.0) * c, step(c, vec3(0.25)));
       c = Ls <= 0.5 ? c - (1.0 - 2.0 * Ls) * c * (1.0 - c) : c + (2.0 * Ls - 1.0) * (D - c);
     }
+    // 第七十四轮:核痕(焦土、枯死带、烟带、核冬天烟尘)正片叠底 —— 贴图是预乘的,c × mix(1, 颜色, a)
+    if (uScarOn > 0.5) {
+      vec4 sk = textureGrad(uScar, st, gx, gy);
+      if (sk.a > 0.002) c *= mix(vec3(1.0), sk.rgb / sk.a, sk.a);
+    }
     float cloudA = 0.0;
     vec4 cv = textureGrad(uCiv, st, gx, gy);
     c = c * (1.0 - cv.a) + cv.rgb;
@@ -676,11 +685,12 @@ void main() {
 const ANISO = 48;
 
 /** 贴图的槽位 */
-export type GlobeSlot = 'terrain' | 'civ' | 'sel' | 'hl' | 'replay' | 'water' | 'slope' | 'cloud' | 'city';
-const SLOTS: GlobeSlot[] = ['terrain', 'civ', 'sel', 'hl', 'replay', 'water', 'slope', 'cloud', 'city'];
+export type GlobeSlot = 'terrain' | 'civ' | 'sel' | 'hl' | 'replay' | 'water' | 'slope' | 'cloud' | 'city' | 'scar';
+const SLOTS: GlobeSlot[] = ['terrain', 'civ', 'sel', 'hl', 'replay', 'water', 'slope', 'cloud', 'city', 'scar'];
 const UNIFORM_OF: Record<GlobeSlot, string> = {
   terrain: 'uTerrain',
   city: 'uCity',
+  scar: 'uScar',
   civ: 'uCiv',
   sel: 'uSel',
   hl: 'uHlTex',
@@ -867,6 +877,7 @@ export class GlobeGL {
     gl.uniform1f(this.u('uHl'), look.hl);
     gl.uniform1f(this.u('uReplay'), look.replay);
     gl.uniform1f(this.u('uCityMode'), look.city ?? 0);
+    gl.uniform1f(this.u('uScarOn'), look.scar ?? 0);
     gl.uniform1f(this.u('uRelief'), look.relief && look.style === 'realistic' ? 1 : 0);
     const wt = look.weights ?? reliefWeights();
     gl.uniform4f(this.u('uReliefW'), wt.detail, wt.macro, wt.sea, wt.shadow);
