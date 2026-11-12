@@ -83,6 +83,7 @@ import {
   editsEra,
   getEdits,
   setSketchBase,
+  setSketchFine,
   setSketchCoast,
   setSketchFill,
   setPlateImage,
@@ -105,6 +106,7 @@ import {
   importMove,
   importOn,
   importResult,
+  onFine,
   importUndoClick,
   importUp,
   keepImport,
@@ -841,10 +843,15 @@ function eraseStroke(st: SketchStroke, hit: readonly number[]) {
  */
 export function applyImport(): boolean {
   const r = importResult();
-  if (!r || !setSketchBase(r.name, r.layer, tool.coast, SKETCH_FILL_NEW)) return false;
+  if (!r || !setSketchBase(r.name, r.layer, tool.coast, SKETCH_FILL_NEW, r.trace)) return false;
   keepImport();
+  const cells = getEdits().sketch?.image?.cells;
+  // 认好时已经又长过一次星球的,不补(粗格子一样、细图不一样的图也会对上)
+  const seq = ++applied;
+  if (r.trace && !r.trace.fine && r.fineKey && cells) onFine(r.fineKey, (fine) => seq === applied && setSketchFine(cells, fine));
   return true;
 }
+let applied = 0;
 const canRedo = (terrain: readonly TerrainOp[], sketch: SketchEdit | undefined) => redo.length > 0 && !!redoAt && redoAt.terrain === terrain && redoAt.sketch === sketch;
 
 /** 撤销最后一笔(这次加的按先后;更早的、助手加的:先撤草图,再撤放的)。照着长的那张图不算一笔,撤不掉 */
@@ -1189,7 +1196,21 @@ export function TerrainPanel({ disabled, phone = false, mode = 'random', extra, 
     </div>
   );
 
-  const coastSeg = <Seg label="海岸线" act="terrain-coast" items={COASTS} value={coast} onPick={setTerrainCoast} />;
+  const coastSeg = sk?.trace ? (
+    <div className="tp-lbl tp-off" data-act="terrain-coast">
+      <b>海岸线</b>
+      <div className="tp-seg" role="radiogroup" aria-label="海岸线" aria-disabled="true">
+        {COASTS.map((x) => (
+          <button key={x.v} role="radio" aria-checked={false} disabled>
+            {x.name}
+          </button>
+        ))}
+      </div>
+      <span className="tp-off-tag">照图原样</span>
+    </div>
+  ) : (
+    <Seg label="海岸线" act="terrain-coast" items={COASTS} value={coast} onPick={setTerrainCoast} />
+  );
   const picked = page === 'plates' && t.tool === 'plateSelect' && probe ? pickedArrow(t) : null;
   const orogeny = sk?.plates?.orogeny !== false;
   const plImg = sk?.plates?.image;
