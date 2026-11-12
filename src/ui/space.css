@@ -1,0 +1,269 @@
+/* 本地分支 modern-pace:世界概览「航天」页(WorldOverviewSpace.tsx) */
+.sp-page {
+  padding: 4px 0 16px;
+}
+.sp-h {
+  margin: 14px 0 6px;
+  font-size: 15px;
+  color: var(--ink);
+}
+.sp-lead {
+  margin: 0 0 6px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.sp-scroll {
+  overflow-x: auto;
+}
+.sp-table {
+  border-collapse: collapse;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.sp-table th,
+.sp-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.sp-table th {
+  color: var(--ink-2);
+  font-weight: normal;
+}
+.sp-table .sp-who {
+  text-align: left;
+  color: var(--ink);
+}
+.sp-table .sp-none {
+  color: var(--ink-3);
+}
+.sp-table .sp-first {
+  color: var(--on-accent);
+  background: var(--accent);
+  border-radius: 3px;
+}
+.sp-moon-box {
+  width: 100%;
+}
+.sp-moon-cv {
+  display: block;
+  cursor: crosshair;
+  border-radius: 4px;
+}
+.sp-moon-info,
+.sp-moon-act {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: center;
+  margin-top: 6px;
+  font-size: 13px;
+  min-height: 20px;
+}
+.sp-place {
+  color: var(--ink);
+  font-weight: 600;
+}
+.sp-coord {
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+.sp-note {
+  color: var(--ink-3);
+}
+.sp-legend {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.sp-k {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin: 0 3px 0 8px;
+  vertical-align: -1px;
+}
+.sp-k-land {
+  background: #ffb347;
+  border-radius: 50%;
+}
+.sp-k-base {
+  background: #7fd6ff;
+}
+.sp-k-iv {
+  background: #ff6b6b;
+}
+
+/* 第三十四轮:航天面板(SpacePanel.tsx):顶栏下面、靠右 */
+.sp-panel {
+  position: absolute;
+  top: 64px;
+  right: calc(14px + var(--ast-room, 0px));
+  z-index: 6;
+  width: min(760px, calc(100vw - 32px));
+  max-height: calc(100vh - 200px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  color: var(--ink);
+  background: var(--panel-solid, var(--surface));
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+}
+.sp-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px 6px;
+  border-bottom: 1px solid var(--line);
+}
+.sp-head strong {
+  font-size: 15px;
+}
+.sp-x {
+  margin-left: auto;
+  border: 0;
+  background: none;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.sp-link {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--link, var(--accent));
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+.sp-body {
+  overflow: auto;
+  padding: 0 14px 12px;
+}
+.sp-news {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.sp-news li {
+  display: flex;
+  gap: 10px;
+  padding: 3px 0;
+  border-bottom: 1px dashed var(--line);
+}
+.sp-news li.big {
+  font-weight: 600;
+}
+.sp-y {
+  flex: none;
+  width: 3.2em;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 640px) {
+  .sp-panel {
+    top: 56px;
+    right: 16px;
+    left: 16px;
+    width: auto;
+  }
+}
+
+/* 月球视图(MoonView.tsx):盖住整张主图,在顶栏、右下按钮、时间轴下面 */
+.moon-view {
+  position: absolute;
+  inset: 0 0 0 var(--side-room, 0px);
+  z-index: 2;
+  background: #07080b;
+}
+.moon-cv {
+  display: block;
+  cursor: grab;
+  touch-action: none;
+}
+.moon-cv:active {
+  cursor: grabbing;
+}
+.moon-card {
+  position: absolute;
+  left: 16px;
+  bottom: 108px;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  color: #eef1f6;
+  background: rgba(12, 14, 20, 0.72);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.moon-card .sp-note {
+  color: #aab2c0;
+}
+.moon-card .sp-place {
+  color: #fff;
+}
+.moon-card .sp-coord {
+  color: #cfd6e2;
+}
+.moon-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.moon-info,
+.moon-act {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: center;
+}
+.moon-card .sp-legend {
+  margin: 0;
+  color: #aab2c0;
+}
+
+/* 图层面板:还没解锁的底图 */
+.lp-layer.locked {
+  opacity: 0.4;
+  cursor: not-allowed;
+  filter: grayscale(1);
+}
+.moon-btn {
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(255, 179, 71, 0.18);
+  color: #fff;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+.moon-btn:hover {
+  background: rgba(255, 179, 71, 0.32);
+}
+.sys-speed {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.sys-step {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: transparent;
+  color: #cfd6e2;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.sys-step.on {
+  background: rgba(120, 180, 255, 0.28);
+  color: #fff;
+  border-color: rgba(120, 180, 255, 0.6);
+}

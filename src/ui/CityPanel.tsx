@@ -12,6 +12,8 @@
  *   历任归属 按时长分段的色条(每段一个国家的颜色),点一段跳到它开始的那年
  *   大事  最近 5 条(可点)
  */
+import { cityNameAt, cityRenames } from '../gen/civ/story/cityNames';
+import { beltName, beltStateAt, cityBelts } from '../gen/civ/story/cityBelts';
 import { useMemo, useState } from 'react';
 import type { Civ, Settlement } from '../gen/civ/types';
 import { cultureLabel, regionLabel } from '../gen/civ/story/display';
@@ -131,6 +133,15 @@ export function CityPanel({ civ, raw, raster, world, id, year, names }: DetailPr
     setMsg(queueIntervention(v, interventionText(civ, v), { self: moveOwner.id, target: { kind: 'settlement', id } }));
   };
 
+  // 本地分支 modern-pace 第五十七轮:城市改名 —— 这一年叫什么、改过几次
+  const nameNow = cityNameAt(civ, id, year);
+  const renames = cityRenames(civ)[id] ?? [];
+  // 第六十轮:城市带 / 并为区
+  const bs = beltStateAt(civ, year);
+  const bigOf = bs ? bs.districtOf[id] : -1;
+  const beltId = bs ? bs.beltOf[id] : -1;
+  const belt = beltId >= 0 ? cityBelts(civ).belts[beltId] : null;
+  const mates = bs && belt ? [...bs.beltOf].map((b, i) => (b === beltId && i !== id && bs.districtOf[i] < 0 ? i : -1)).filter((i) => i >= 0) : [];
   return (
     <div className="cp" data-settlement={id}>
       <PanelHead color={stands && owner ? rgb(owner.color) : undefined}>
@@ -150,6 +161,10 @@ export function CityPanel({ civ, raw, raster, world, id, year, names }: DetailPr
           className="ins-status"
           parts={[
             ruined ? '故城' : '城',
+            nameNow !== s.name ? `此时名为${nameNow}` : null,
+            bigOf >= 0 ? `为${cityNameAt(civ, bigOf, year)}的一区` : null,
+            belt && bigOf < 0 ? `属${beltName(civ, belt)}${mates.length ? `(与${mates.slice(0, 5).map((i) => cityNameAt(civ, i, year)).join('、')}${mates.length > 5 ? `等 ${mates.length} 城` : ''}连成一片)` : ''}` : null,
+            renames.length ? `改过 ${renames.length} 次名(${renames.map((r) => `${yearAt(r.year, era)}${r.name}`).join('、')})` : null,
             `${yearAt(s.founded, era)}${built ? '' : '才'}建城`,
             ruined ? `毁于${spaced(yearAt(s.ended!, era))}` : owner ? <>属 {polityLink(owner.id, year)}</> : stands ? '部落地带' : null,
           ]}

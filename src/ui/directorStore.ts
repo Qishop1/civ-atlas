@@ -142,6 +142,10 @@ function fly(focus: Focus | null) {
   flyReq = { focus, stamp: (flyReq?.stamp ?? 0) + 1 };
   flySubs.emit();
 }
+/** 本地分支 modern-pace 第二十四轮:别处(核战叠加层 NukeLayer.tsx)请地图飞过去,和导播走同一条路 */
+export function requestMapFly(focus: Focus | null) {
+  fly(focus);
+}
 export function getDirectorFly(): { focus: Focus; stamp: number } | null {
   return flyReq;
 }

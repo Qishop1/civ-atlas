@@ -52,6 +52,10 @@ import { advanceBrief } from '../advanceText';
 import { cleanOrigins, frontierBrief, terrainChangedCount, terrainValue, type Origins } from '../../gen/civ/frontier';
 import { EXPAND_SLIDER, SPREAD_SLIDER, TERRAIN_SLIDERS, withSpeed, withTerrain, withoutTerrain } from '../frontierUi';
 import { OriginsPage } from './OriginsPage';
+import { SystemOrrery, SystemSettings } from './SystemStep';
+import { generateSystem, promoteToHome, randomSpec } from '../../gen/system';
+import { planetWorldParams } from '../../gen/planetWorld';
+import { carrySystemSpec, setSystemSpec } from '../editsStore';
 import { originCiv, originRefusal, originSpots, poseMap } from './origins';
 import { OFFICIAL_RULES_NAME, ruleSetLabel } from '../../gen/civ/ruleSetEdit';
 import type { RuleSet } from '../../gen/civ/ruleSet';
@@ -358,6 +362,9 @@ export function Studio(p: StudioProps) {
   const twoStep = !image && !p.base && !locked;
   /** 两步里到了第 2 步「文明」(照故事找世界「用这个世界」回来的直接在第 2 步) */
   const [civStep, setCivStep] = useState(() => !!p.found);
+  /** 本地分支 modern-pace:随机生成的第一步「恒星系」(SystemStep.tsx);定下以后才到「地图」 */
+  const [sysStep, setSysStep] = useState(() => twoStep && !p.found);
+  const sysOn = twoStep && sysStep && !civStep;
   /** 照故事找的:种子、推演年数、拓荒、起源、天灾、规则锁着(改了历史就不是找到的那样) */
   const found = twoStep ? (p.found ?? null) : null;
   const step2 = locked || (twoStep && civStep);
@@ -1130,7 +1137,9 @@ export function Studio(p: StudioProps) {
       ? `设定都带过来了，改完存成一个新世界，${base.title}本身不变。`
       : image
         ? '海和陆地照你的图长，山、河、气候由程序补上。'
-        : civStep
+        : sysOn
+          ? '先定恒星系：恒星是哪一型、有哪些行星。标绿的是宜居的，点开看、放大看地表，挑一颗当母星（「选它当母星」或一直放大进去）。'
+          : civStep
           ? '地图定下了。接下来定文明怎么推演：一口气推完，或者从第 0 年起演绎。'
           : '按种子随机生成。地图做好了，可以先保存，也可以接着打造文明。';
   const isDefault = (Object.keys(DEFAULT_PARAMS) as (keyof WorldParams)[]).every((k) => k === 'seed' || p.params[k] === DEFAULT_PARAMS[k]) && (twoStep || !edits.frontier);
@@ -1311,8 +1320,11 @@ export function Studio(p: StudioProps) {
             <ContinentSeg value={p.params.continents} onChange={(n) => p.onParams({ ...p.params, continents: n })} plates={p.params.plates} land={p.params.landFraction} />
           </div>
           {CONT_SLIDERS.map(slider)}
-          <div className="nw-sub">气候</div>
-          {SLIDERS.slice(3, 5).map(slider)}
+          {/* 本地分支 modern-pace:有「恒星系」那一步的(随机生成)气温由母星离恒星多远定,这里只留降水 */}
+          <div className="nw-sub">{twoStep ? '水汽' : '气候'}</div>
+          {SLIDERS.slice(3, 5)
+            .filter((x) => !(twoStep && x.key === 'temperature'))
+            .map(slider)}
           <div className="nw-sub">精细度</div>
           {SLIDERS.slice(5).map(slider)}
           {/* 分两步的新建:拓荒、推演年数在第 2 步「文明」里 */}
@@ -1656,7 +1668,21 @@ export function Studio(p: StudioProps) {
     setTip(false);
   };
   const backLink =
-    twoStep && civStep ? (
+    twoStep && !civStep && !sysStep ? (
+      <button
+        className="nw-back"
+        data-act="back-to-system"
+        onClick={() => {
+          setDrawer(null);
+          if (tool.on) setTerrainTool({ on: false });
+          closeAssistant();
+          setSysStep(true);
+        }}
+      >
+        <Icon name="back" size={18} />
+        改恒星系
+      </button>
+    ) : twoStep && civStep ? (
       <button className="nw-back" data-act="back-to-map" onClick={toMap}>
         <Icon name="back" size={18} />
         改地图
@@ -1669,16 +1695,21 @@ export function Studio(p: StudioProps) {
         </button>
       )
     );
-  /** 两步:「① 地图 —— ② 文明」,现在这一步蓝色,做完的打勾 */
+  /** 三步:「① 恒星系 —— ② 地图 —— ③ 文明」,现在这一步蓝色,做完的打勾 */
   const stepper = twoStep && (
-    <div className="st-steps" aria-label={civStep ? '第 2 步，共 2 步' : '第 1 步，共 2 步'}>
-      <span className={`st-st${civStep ? ' ok' : ' on'}`} data-step="map">
-        <i>{civStep ? <Icon name="check" size={11} /> : '1'}</i>
+    <div className="st-steps" aria-label={`第 ${sysOn ? 1 : civStep ? 3 : 2} 步，共 3 步`}>
+      <span className={`st-st${sysOn ? ' on' : ' ok'}`} data-step="system">
+        <i>{sysOn ? '1' : <Icon name="check" size={11} />}</i>
+        恒星系
+      </span>
+      <span className="st-bar" aria-hidden="true" />
+      <span className={`st-st${civStep ? ' ok' : sysOn ? '' : ' on'}`} data-step="map">
+        <i>{civStep ? <Icon name="check" size={11} /> : '2'}</i>
         地图
       </span>
       <span className="st-bar" aria-hidden="true" />
       <span className={`st-st${civStep ? ' on' : ''}`} data-step="civ">
-        <i>2</i>
+        <i>3</i>
         文明
       </span>
     </div>
@@ -1722,7 +1753,19 @@ export function Studio(p: StudioProps) {
       </button>
     </div>
   );
-  const footBtn = twoStep && !civStep ? mapBtns : createBtn;
+  const sysBtn = (
+    <button
+      className="nw-create"
+      data-act="to-map"
+      onClick={() => {
+        setSysStep(false);
+        setTip(true);
+      }}
+    >
+      {p.phone ? '恒星系定好了，下一步' : '定下恒星系 ›'}
+    </button>
+  );
+  const footBtn = sysOn ? sysBtn : twoStep && !civStep ? mapBtns : createBtn;
   const mixShown = namesPage && !tool.on && !peek;
   const rpShown = rulesOn && rulesPage && !tool.on && !peek && !mixShown;
   /** 文明起源按第 0 年的州看(有地形大事时是大事以前的,见 origins.ts 的 originCiv) */
@@ -1897,6 +1940,14 @@ export function Studio(p: StudioProps) {
   );
   const settings = tool.on ? (
     <TerrainPanel disabled={p.busy} phone={p.phone} />
+  ) : sysOn ? (
+    <section className="sb-sec">
+      <div className="sb-sec-head">
+        <span>恒星系</span>
+      </div>
+      <div className="sb-group">{seedRow}</div>
+      <SystemSettings params={p.params} onParams={p.onParams} disabled={p.busy} />
+    </section>
   ) : step2 ? (
     civSettings(p.phone && !sheetFull)
   ) : (
@@ -2128,7 +2179,8 @@ export function Studio(p: StudioProps) {
       )}
     </button>
   );
-  const right = !image && (
+  // 第一步「恒星系」用不着样式、投影,右边整个不放
+  const right = !image && !sysOn && (
     <aside className="st-right" aria-label="样式和投影" onPointerDown={stop} onClick={stop} onWheel={stop}>
       {(!p.phone || drawer === 'style') && (
         <>
@@ -2239,6 +2291,7 @@ export function Studio(p: StudioProps) {
     drawer ? `drawer-${drawer}` : '',
     sheetFull ? 'sheet-full' : '',
     astShown ? 'ast' : '',
+    sysOn ? 'sys-on' : '',
   ]
     .filter(Boolean)
     .join(' ');
@@ -2249,6 +2302,30 @@ export function Studio(p: StudioProps) {
       <canvas ref={labRef} className={`st-labels${labOn && !tool.on && !out && glOk ? ' on' : ''}${p.namesIn ? ' names-in' : ''}`} aria-hidden="true" />
       <canvas ref={markRef} className={`st-labels st-marks${markOn && astShown && !tool.on && !out && glOk ? ' on' : ''}`} data-marks={markOn && astShown ? marks.length : 0} aria-hidden="true" />
       {pins}
+      {sysOn && (
+        <SystemOrrery
+          params={p.params}
+          left={p.phone ? 0 : collapsed ? 0 : 340}
+          right={0}
+          onHome={() => {
+            setSysStep(false);
+            setTip(true);
+          }}
+          onPickHome={(key) => {
+            const spec = edits.system ?? randomSpec(p.params.seed);
+            const sys = generateSystem(p.params.seed, p.params.temperature, spec);
+            const pl = sys.planets.find((q) => q.key === key);
+            if (!pl) return;
+            const w = planetWorldParams(p.params.seed, pl);
+            const next = promoteToHome(spec, key);
+            carrySystemSpec(next);
+            setSystemSpec(next);
+            p.onParams({ ...p.params, seed: w.seed, temperature: w.temperature, landFraction: w.landFraction, rainfall: w.rainfall, plates: w.plates, mountains: w.mountains });
+            setSysStep(false);
+            setTip(true);
+          }}
+        />
+      )}
       {(drawer || styOpen) && (
         <div
           className="st-dismiss"
@@ -2265,7 +2342,7 @@ export function Studio(p: StudioProps) {
           <span className="side-open-name">{heading}</span>
         </button>
       )}
-      {p.phone && !image && (
+      {p.phone && !image && !sysOn && (
         <div className="st-ph-btns" onPointerDown={stop} onClick={stop}>
           <button className={`st-ph-btn${drawer === 'style' ? ' on' : ''}`} data-act="studio-style" aria-label="样式" aria-expanded={drawer === 'style'} onClick={() => setDrawer((d) => (d === 'style' ? null : 'style'))}>
             <span className="st-thumb" style={thumb(style) ? { backgroundImage: `url(${thumb(style)})` } : undefined} />
@@ -2317,7 +2394,7 @@ export function Studio(p: StudioProps) {
         </div>
       )}
       {!image && (
-        <div ref={tipRef} className={`st-cap st-tip${tip && !viewSaved && !tool.on && !out && !(p.phone && (drawer || sheetFull)) ? '' : ' off'}`}>
+        <div ref={tipRef} className={`st-cap st-tip${tip && !sysOn && !viewSaved && !tool.on && !out && !(p.phone && (drawer || sheetFull)) ? '' : ' off'}`}>
           {locked
             ? srcName
               ? `这是「${srcName}」一开始的地图；拖动看看，在${p.phone ? '下面' : '左边'}定文明怎么推演`

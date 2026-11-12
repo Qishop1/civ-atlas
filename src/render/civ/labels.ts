@@ -14,9 +14,13 @@
  *   · 岛 12 / 11 / 10.5 · 国都 13.5 · 大城 12 · 城 11.5 · 河、湖 11.5 / 11 / 10.5 · 镇、村 10.5
  * 显示门槛:rank 1 总览就显示;rank 2 放大到 1.8 倍;rank 3 放大到 3 倍。城镇见 labels/settlements.ts。
  */
+import { cityNameAt } from '../../gen/civ/story/cityNames';
+import { beltName, beltStateAt, cityBelts } from '../../gen/civ/story/cityBelts';
+import { populationAt } from '../../gen/civ/growth';
 import type { Civ, Place, Year } from '../../gen/civ/types';
 import type { World } from '../../gen/world';
 import type { Raster } from '../../gen/raster';
+import { cityPos } from './cityPos';
 import { capitalAt, polityAlive, ownersAt, faithAt } from '../../gen/readers/openQuery';
 import { polityAllTitles } from '../../gen/civ/growth';
 import { FONT_FANTASY, FONT_REALISTIC } from '../labels/fonts';
@@ -181,6 +185,72 @@ export function placeLabelItems(places: Place[], style: CivStyle): LabelItem[] {
     }
     out.push(item);
   });
+  return out;
+}
+
+/** 第六十轮:城市带里的城(国都以外)放大到几倍才写名字;并为区的城几倍才出现 */
+const BELT_MEMBER_ZOOM = 2.2;
+const DISTRICT_ZOOM = 6;
+
+/** 城市带的带名:写在带里各城(按人口加权)的中间(压不下就挪到旁边),横排;远看就有,放大以后带里的城名出来 */
+function beltLabelItems(civ: Civ, world: World, bs: NonNullable<ReturnType<typeof beltStateAt>>, year: number, style: CivStyle, family: string): LabelItem[] {
+  const B = cityBelts(civ);
+  const groups = new Map<number, number[]>();
+  bs.beltOf.forEach((b, i) => {
+    if (b >= 0 && bs.districtOf[i] < 0) (groups.get(b) ?? groups.set(b, []).get(b)!).push(i);
+  });
+  const { x: mx, y: my } = world.mesh;
+  const W = world.width;
+  const out: LabelItem[] = [];
+  const look =
+    style === 'fantasy'
+      ? { color: 'rgba(74,52,36,0.9)', halo: { color: PAPER_HALO, width: 2.4 } }
+      : style === 'realistic'
+        ? { color: 'rgba(52,48,44,0.92)', halo: { color: 'rgba(255,255,255,0.66)', width: 2.4 } }
+        : { color: 'rgb(40,36,32)', halo: { color: 'rgba(255,255,255,0.7)', width: 2.2 } };
+  for (const [b, mem] of groups) {
+    const S = civ.settlements;
+    const w = mem.map((i) => Math.max(1, populationAt(S[i], year)));
+    const x0 = mx[S[mem[0]].cell];
+    let sx = 0, sy = 0, sw = 0;
+    mem.forEach((i, k) => {
+      let x = mx[S[i].cell];
+      if (x - x0 > W / 2) x -= W;
+      else if (x0 - x > W / 2) x += W;
+      sx += x * w[k];
+      sy += my[S[i].cell] * w[k];
+      sw += w[k];
+    });
+    const cx = sx / sw, cy = sy / sw;
+    let span = 0;
+    for (const i of mem) {
+      let dx = Math.abs(mx[S[i].cell] - cx);
+      dx = Math.min(dx, W - dx);
+      span = Math.max(span, Math.hypot(dx, my[S[i].cell] - cy));
+    }
+    const half = Math.max(6, span * 0.8);
+    const total = w.reduce((a, c) => a + c, 0);
+    out.push({
+      text: beltName(civ, B.belts[b]),
+      path: new Float32Array([cx - half, cy, cx + half, cy]),
+      layout: 'point',
+      size: 12.5,
+      grow: 0.45,
+      tracking: [0.35, 0.35],
+      minZoom: 1,
+      // 和国名一样排在城的符号之前(符号让字;带名压着的小城放大后再出来),在国都名(100.5)之后
+      priority: 100.1 + Math.min(0.3, Math.log10(1 + total / 1000) * 0.05),
+      family,
+      weight: 700,
+      color: look.color,
+      halo: look.halo,
+      inside: SURFACE.land | SURFACE.lake | SURFACE.sea,
+      around: SURFACE.land | SURFACE.lake | SURFACE.sea,
+      on: SURFACE.land | SURFACE.lake | SURFACE.sea,
+      radius: 0,
+      tolerance: 0.9,
+    });
+  }
   return out;
 }
 
@@ -690,18 +760,24 @@ export function civMapLayer(p: CivDrawParams, opt: { fast?: boolean; proj?: MapP
   if ((p.show.polities || p.show.routes) && civ.settlements.length) {
     const { x: mx, y: my } = world.mesh;
     const boxes = SYMBOL_BOX[style === 'fantasy' ? 'fantasy' : 'realistic'];
+    // 本地分支 modern-pace 第六十轮:城市带 —— 远看写带名;带里的城(国都以外)放大到 2.2 倍才写名字;并为区的城放大到街区一级(6 倍)才出现、写灰色小字
+    const bs = beltStateAt(civ, p.year);
+    if (bs && !opt.fast) items.push(...beltLabelItems(civ, world, bs, p.year, style, family));
     for (const e of settlementsAt(civ, p.year)) {
       const k = e.kind;
+      const inBelt = !!bs && bs.beltOf[e.s.id] >= 0 && k < 4;
+      const isDistrict = !!bs && bs.districtOf[e.s.id] >= 0 && k < 4;
       const mark: LabelMark & SettlementMarkInfo = {
         id: e.s.id,
-        x: mx[e.s.cell],
-        y: my[e.s.cell],
+        // 第六十七轮:地块中心落在底图的水里就挪到最近的陆地上(cityPos.ts)
+        x: cityPos(world, p.raster, e.s.cell)[0],
+        y: cityPos(world, p.raster, e.s.cell)[1],
         box: boxes[k],
         grow: SYMBOL_GROW,
-        minZoom: SYMBOL_MIN_ZOOM[k],
-        priority: SYMBOL_PRIORITY[k],
+        minZoom: isDistrict ? DISTRICT_ZOOM : SYMBOL_MIN_ZOOM[k],
+        priority: isDistrict ? SYMBOL_PRIORITY[0] : SYMBOL_PRIORITY[k],
         forced: k === 4,
-        softBelow: k <= 1 ? NAME_MIN_ZOOM[k] : undefined,
+        softBelow: isDistrict ? DISTRICT_ZOOM : k <= 1 ? NAME_MIN_ZOOM[k] : undefined,
         kind: k,
         color: e.color,
         polity: e.polity,
@@ -711,15 +787,16 @@ export function civMapLayer(p: CivDrawParams, opt: { fast?: boolean; proj?: MapP
       const look = looks.town(k);
       const name = settlementNameItem(
           {
-            text: e.s.name,
-            size: NAME_SIZE[k],
+            // 本地分支 modern-pace 第五十七轮:城市改名 —— 写那一年的名字
+            text: cityNameAt(civ, e.s.id, p.year),
+            size: isDistrict ? NAME_SIZE[0] - 0.5 : NAME_SIZE[k],
             grow: NAME_GROW,
             tracking: [0.04, 0.04],
-            minZoom: NAME_MIN_ZOOM[k],
-            priority: NAME_PRIORITY[k],
+            minZoom: isDistrict ? DISTRICT_ZOOM : inBelt ? Math.max(BELT_MEMBER_ZOOM, NAME_MIN_ZOOM[k]) : NAME_MIN_ZOOM[k],
+            priority: isDistrict ? NAME_PRIORITY[0] : NAME_PRIORITY[k],
             family,
-            weight: look.weight,
-            color: look.color,
+            weight: isDistrict ? 500 : look.weight,
+            color: isDistrict ? (style === 'fantasy' ? 'rgba(92,70,52,0.85)' : 'rgba(70,70,70,0.9)') : look.color,
             halo: look.halo,
           },
           mark,
@@ -744,8 +821,8 @@ export function civMapLayer(p: CivDrawParams, opt: { fast?: boolean; proj?: MapP
     for (const { s, rank } of ruinsAt(civ, p.year)) {
       const mark: LabelMark & SettlementMarkInfo = {
         id: s.id,
-        x: mx[s.cell],
-        y: my[s.cell],
+        x: cityPos(world, p.raster, s.cell)[0],
+        y: cityPos(world, p.raster, s.cell)[1],
         box: boxes[RUIN],
         grow: SYMBOL_GROW,
         minZoom: RUIN_SYMBOL_ZOOM[rank],

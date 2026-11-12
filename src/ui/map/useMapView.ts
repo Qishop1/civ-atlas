@@ -248,11 +248,19 @@ export function useMapView({ view, setView, stageRef, data, dataRef, narrow, pan
     w.__wfSetProjection = (p: MapProjection) => setProjection(p);
     // 编辑地形的检查脚本用:地图上现在这张(世界、主图)和投影,拿去从头整张重画、和画面逐像素比
     w.__wfMapData = () => ({ data: dataRef.current, mp: mpRef.current, style: drawView.current.style, look: drawView.current.look });
+    // 本地分支 modern-pace 第五十九轮:舞台的位置缓存 200 ms。城市层放大后逐点换算街道(一帧上万次),
+    // 每次都 getBoundingClientRect 会逼浏览器重排,放大第一级掉到 40–54 fps
+    let rc: { el: Element; r: DOMRect; t: number } | null = null;
+    const stageRect = (el: Element) => {
+      const now = performance.now();
+      if (!rc || rc.el !== el || now - rc.t > 200) rc = { el, r: el.getBoundingClientRect(), t: now };
+      return rc.r;
+    };
     w.__wfWorldToClient = worldToClient.current = (wx: number, wy: number): [number, number] | null => {
       const el = stageRef.current;
       const g = geo.current;
       if (!el || !g.bw) return null;
-      const r = el.getBoundingClientRect();
+      const r = stageRect(el);
       const b = { sw: r.width, sh: r.height, bw: g.bw, bh: g.bh };
       const v = viewRef.current;
       const m = mpRef.current;

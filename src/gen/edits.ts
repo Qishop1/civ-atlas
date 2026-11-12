@@ -750,7 +750,8 @@ export type InterventionKind =
   | 'boost'
   | 'trek'
   | 'stay'
-  | 'appoint';
+  | 'appoint'
+  | 'moonsite';
 
 /**
  * 大迁徙(trek)"推演挑"时走多远:near 近(五到十州)/ mid 中(十到二十州,和推演自己起的一样)/ far 远(二三十州,横穿大陆,只有下令才有)。
@@ -880,6 +881,8 @@ export type Intervention = (
   | { kind: 'boost'; a: string; from: number; mul?: BoostMul; until?: number; regions?: string[] }
   | { kind: 'trek'; folk: string; from: number; region?: string; to?: string; reach?: Exclude<TrekReach, 'mid'>; dir?: TrekDir }
   | { kind: 'stay'; folk: string; from: number; until?: number }
+  /** 本地分支 modern-pace:月面着陆点 —— from 那年及以后头一次载人登月落在这里(哪国都算;只改编年史,不进推演) */
+  | { kind: 'moonsite'; from: number; lon: number; lat: number }
   | {
       kind: 'policy';
       a: string;
@@ -993,6 +996,8 @@ export interface WorldEdits {
   rules?: RuleSet;
   /** 文明种子(见文件头"文明种子");没有 = 等于地图种子 */
   civSeed?: number;
+  /** 本地分支 modern-pace:编辑过的恒星系规格(gen/system.ts;新建第一步「恒星系」);没有 = 按地图种子随机 */
+  system?: import('./system').SystemSpec;
   /** 这段历史用的是哪张地图(见文件头"文明种子");没有 = 不是在别的世界的地图上新开的 */
   map?: MapRef;
   /** 纪年(见文件头"纪年"、era.ts);没有 = 按"第几年"写 */
@@ -1964,7 +1969,7 @@ function folkRenamed(civ: Civ, f: Faith, cultures: readonly Culture[]): string |
 /** 干预年份的上限(推演引擎能预约的最远时刻) */
 export const INTERVENTION_YEAR_MAX = 65535;
 
-export const INTERVENTION_KINDS: readonly InterventionKind[] = ['protect', 'ally', 'declare', 'unity', 'cede', 'found', 'move', 'halt', 'crown', 'policy', 'destroy', 'death', 'temper', 'disaster', 'treaty', 'neutral', 'regent', 'marry', 'keep', 'boost', 'trek', 'stay', 'appoint'];
+export const INTERVENTION_KINDS: readonly InterventionKind[] = ['protect', 'ally', 'declare', 'unity', 'cede', 'found', 'move', 'halt', 'crown', 'policy', 'destroy', 'death', 'temper', 'disaster', 'treaty', 'neutral', 'regent', 'marry', 'keep', 'boost', 'trek', 'stay', 'appoint', 'moonsite'];
 
 /** 人物键的几段(格式见 personKey):国家键、身份、生成时的名字、生年(取整)、同名同年的第几个(0 起);格式不对 = null */
 export interface PersonKeyParts {
@@ -2305,6 +2310,11 @@ export function tidyIntervention(x: unknown): Intervention | null {
     const d = cleanDisaster(o, from);
     if (!d) return null;
     v = d;
+  } else if (kind === 'moonsite') {
+    const lon = typeof o.lon === 'number' && Number.isFinite(o.lon) ? Math.round(Math.max(-180, Math.min(180, o.lon)) * 10) / 10 : null;
+    const lat = typeof o.lat === 'number' && Number.isFinite(o.lat) ? Math.round(Math.max(-90, Math.min(90, o.lat)) * 10) / 10 : null;
+    if (lon === null || lat === null) return null;
+    v = { kind, from, lon, lat };
   } else if (kind === 'trek' || kind === 'stay') {
     const t = cleanTrek(o, kind, from, untilOf());
     if (!t) return null;
@@ -2706,7 +2716,7 @@ export function sameFollow(a: unknown, b: unknown): boolean {
  * 天灾只有选了一国闹饥荒的才有)
  */
 export function interventionKeys(v: Intervention): string[] {
-  if (v.kind === 'found' || v.kind === 'trek' || v.kind === 'stay') return [];
+  if (v.kind === 'found' || v.kind === 'trek' || v.kind === 'stay' || v.kind === 'moonsite') return [];
   if (v.kind === 'disaster') return v.a ? [v.a] : [];
   if (v.kind === 'destroy') return v.b ? [v.a, v.b] : [v.a];
   if (v.kind === 'treaty') return v.by ? [v.a, ...v.ps, v.by] : [v.a, ...v.ps];

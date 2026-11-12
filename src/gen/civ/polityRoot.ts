@@ -3,6 +3,7 @@
  * 单独放:存档里的改名(edits.ts)只用得到这几样,不用跟着带上人口、国号那一整套。纯函数。
  */
 import type { Polity, Year } from './types';
+import { federationName } from './homeworld';
 
 /**
  * 某一年是第几朝(Polity.dynasties 的下标,改朝换代那一刻起算新朝;没改朝换代过 = 0)。
@@ -27,6 +28,8 @@ export function dynastyAt(p: Polity, year: Year): NonNullable<Polity['dynasties'
  * 新朝还没起名(推演中途)= 原词根
  */
 export function polityRootAt(p: Polity, year: Year): string {
+  // 本地分支 modern-pace 第二十六轮:成了地球联邦以后
+  if (p.federation !== undefined && p.federation <= year) return federationName(p);
   if (!p.eastern || !p.dynasties || p.dynasties.length < 2) return p.name;
   return segRootOf(p, dynastyIndexAt(p, year));
 }

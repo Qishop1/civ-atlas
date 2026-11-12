@@ -116,6 +116,7 @@
 import type { World } from './world';
 import { DEFAULT_PARAMS, type WorldParams } from './params';
 import { cleanMix, sameMix } from './names/mix';
+import { cleanSystemSpec } from './system';
 import { END_YEAR_DEFAULT, END_YEAR_MAX, GENERATOR_CHANGES, GENERATOR_VERSION, MARKS_MAX, MARK_REGIONS_TOTAL, NAME_MAX, YEAR_TICKS, aiNameKeys, cleanCivSeed, cleanEndTick, cleanEndYear, endAtOf, endParamOf, keptMapOf, playAt, cleanMapRef, cleanMark, cleanPlay, cleanPlayFrom, cleanBranches, branchPlay, playState, cleanAdvance, advanceOf, sameAdvance, cleanFollow, cleanOutline, endYearOf, freeMarkId, resolveKey, type AdvanceSettings, type AiNameMark, type AuthorMark, type GeneratorChange, type Intervention, type Outline, type PlayBranches, type PlayState, type TerrainOp, type Upheaval, type WorldEdits } from './edits';
 import type { Civ } from './civ/types';
 import { TERRAIN_MAX_OPS, UPHEAVALS_MAX, UPHEAVAL_KINDS, UPHEAVAL_OPS_MAX, cleanTerrainOp, cleanUpheaval } from './terrainOps';
@@ -669,6 +670,8 @@ export function makeSave(
   if (rules) save.edits.rules = rules;
   const civSeed = cleanCivSeed(edits.civSeed);
   if (civSeed !== undefined) save.edits.civSeed = civSeed;
+  const system = cleanSystemSpec(edits.system);
+  if (system) save.edits.system = system;
   const map = cleanMapRef(edits.map);
   if (map) save.edits.map = map;
   const era = cleanEra(edits.era);
@@ -956,6 +959,8 @@ export function parseSave(text: string): ParseResult {
   // 文明种子:不是整数的按地图种子推
   const civSeed = cleanCivSeed(E.civSeed);
   if (E.civSeed !== undefined && civSeed === undefined) warnings.push('文明种子认不出来,按地图种子推演');
+  const system = cleanSystemSpec(E.system);
+  if (E.system !== undefined && !system) warnings.push('恒星系认不出来,按地图种子重新生成');
   const map = cleanMapRef(E.map);
   // 纪年:名字、元年不合格的按第几年写
   const era = cleanEra(E.era);
@@ -1024,6 +1029,7 @@ export function parseSave(text: string): ParseResult {
       ...(calamity ? { calamity } : {}),
       ...(rules ? { rules } : {}),
       ...(civSeed !== undefined ? { civSeed } : {}),
+      ...(system ? { system } : {}),
       ...(map ? { map } : {}),
       ...(era ? { era } : {}),
       ...(months !== undefined ? { months } : {}),

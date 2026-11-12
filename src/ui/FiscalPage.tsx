@@ -22,7 +22,7 @@ import { openInfoPage, setSheet } from './panelStore';
 import { setCivShow } from './civView';
 import { fillShow } from './mapLayers';
 import { Row, rgb } from './panelParts';
-import { MOOD_NAMES, chengText, fiscalAlarms, fiscalHistory, fiscalView, wan } from './fiscalInfo';
+import { MOOD_NAMES, chengText, fiscalAlarms, fiscalHistory, fiscalView, moneyOf, wan, type Money } from './fiscalInfo';
 import './fiscal.css';
 
 /** 概况「钱粮」一行里的小柱有几根 */
@@ -49,19 +49,21 @@ export function FiscalRow({ civ, id, year }: { civ: Civ; id: number; year: numbe
     setSheet('full');
   };
   const bad = v.mood === 3;
+  // 本地分支 modern-pace 第二十八轮:钱数的单位随时代换(万石 / 万两 / 亿元)
+  const m = moneyOf(civ, id, year);
   return (
     <Row k="钱粮" className="cp-terr fs-row">
       <SparkBars civ={civ} id={id} year={year} n={ROW_BARS} />
       <button className={`ins-link fs-open${bad ? ' bad' : ''}`} data-act="fiscal" onClick={open} title="看这一国的钱粮">
         {bad ? '国用不足' : `国库${MOOD_NAMES[v.mood]}`}
       </button>
-      <em className="cp-num-note">{bad ? `每年亏 ${wan(-v.net)} 万石` : `岁入 ${wan(v.income)} 万石`}</em>
+      <em className="cp-num-note">{bad ? `每年亏 ${m.n(-v.net)} ${m.unit}` : `岁入 ${m.n(v.income)} ${m.unit}`}</em>
     </Row>
   );
 }
 
 /** 一行:名目(带小字)、比例条(可选)、数 */
-function Line({ k, note, n, bar, minus, dot }: { k: string; note?: string; n: number; bar?: number; minus?: boolean; dot?: string }) {
+function Line({ k, note, n, bar, minus, dot, m }: { k: string; note?: string; n: number; bar?: number; minus?: boolean; dot?: string; m: Money }) {
   return (
     <div className="fs-li">
       {dot && <i className="fs-dot" style={{ background: dot }} />}
@@ -75,9 +77,9 @@ function Line({ k, note, n, bar, minus, dot }: { k: string; note?: string; n: nu
         </span>
       )}
       <span className={`fs-n${minus ? ' minus' : ''}`}>
-        {minus && wan(n) > 0 ? '−' : ''}
-        {wan(n)}
-        <small>万石</small>
+        {minus && m.n(n) !== '0' ? '−' : ''}
+        {m.n(n)}
+        <small>{m.unit}</small>
       </span>
     </div>
   );
@@ -151,9 +153,10 @@ export function FiscalPage({ civ, id, year }: { civ: Civ; id: number; year: numb
     );
   }
   const bad = v.mood === 3;
+  const m = moneyOf(civ, id, year);
   const say = bad
-    ? `国库空了,每年还亏 ${wan(-v.net)} 万石:国内更不安稳、少开战、仗容易罢兵。`
-    : `${v.fill >= 0.995 ? '攒满了' : `攒到${chengText(v.fill)}`}(最多攒一年半的应缴)。每年${v.net >= 0 ? `结余 ${wan(v.net)}` : `亏 ${wan(-v.net)}`} 万石。`;
+    ? `国库空了,每年还亏 ${m.n(-v.net)} ${m.unit}:国内更不安稳、少开战、仗容易罢兵。`
+    : `${v.fill >= 0.995 ? '攒满了' : `攒到${chengText(v.fill)}`}(最多攒一年半的应缴)。每年${v.net >= 0 ? `结余 ${m.n(v.net)}` : `亏 ${m.n(-v.net)}`} ${m.unit}。`;
   const foe = v.foes[0] !== undefined ? civ.polities[v.foes[0]] : undefined;
   const armyNote = v.wars <= 0 ? '没在打仗' : v.foes.length === 1 && foe ? `和${polityName(foe, year)}交战` : `在打 ${Math.max(v.wars, v.foes.length)} 场仗`;
   const owed = Math.max(1e-9, v.owed);
@@ -163,12 +166,12 @@ export function FiscalPage({ civ, id, year }: { civ: Civ; id: number; year: numb
         <div className="cp-from fs-top">
           <div className="fs-lbl">
             <span>{yearFull(year, era)}</span>
-            <span>每年的数,单位万石</span>
+            <span>每年的数,单位{m.unit}</span>
           </div>
           <div className="fs-big">
             <span className="fs-u">国库</span>
-            <b>{wan(v.treasury)}</b>
-            <span className="fs-u">万石</span>
+            <b>{m.n(v.treasury)}</b>
+            <span className="fs-u">{m.unit}</span>
             <span className={`fs-chip${bad ? ' bad' : v.mood === 0 ? ' ok' : ''}`} data-mood={v.mood}>
               {MOOD_NAMES[v.mood]}
             </span>
@@ -180,28 +183,28 @@ export function FiscalPage({ civ, id, year }: { civ: Civ; id: number; year: numb
           <div className="cp-sec-head">
             <span>进项</span>
             <span className="fs-sum">
-              实收 <b>{wan(v.got)}</b> 万石
+              实收 <b>{m.n(v.got)}</b> {m.unit}
             </span>
           </div>
           <div className="cp-group fs-group">
-            <Line k="田赋" note="乡村" n={v.land} bar={v.land / owed} />
-            <Line k="工商" note="城里" n={v.craft} bar={v.craft / owed} />
-            <Line k="市税" note="商路港口" n={v.trade} bar={v.trade / owed} />
-            <Line k="各地截留" note={`交上来${chengText(v.got / owed)}`} n={v.kept} minus />
-            {wan(v.tribIn) > 0 && <Line k="收贡" note="藩属交来" n={v.tribIn} />}
+            <Line m={m} k="田赋" note="乡村" n={v.land} bar={v.land / owed} />
+            <Line m={m} k="工商" note="城里" n={v.craft} bar={v.craft / owed} />
+            <Line m={m} k="市税" note="商路港口" n={v.trade} bar={v.trade / owed} />
+            <Line m={m} k="各地截留" note={`交上来${chengText(v.got / owed)}`} n={v.kept} minus />
+            {wan(v.tribIn) > 0 && <Line m={m} k="收贡" note="藩属交来" n={v.tribIn} />}
           </div>
         </section>
         <section className="cp-sec">
           <div className="cp-sec-head">
             <span>开销</span>
             <span className="fs-sum">
-              岁出 <b>{wan(v.spent)}</b> 万石
+              岁出 <b>{m.n(v.spent)}</b> {m.unit}
             </span>
           </div>
           <div className="cp-group fs-group">
-            <Line k="养官" n={v.office} />
-            <Line k="军费" note={armyNote} n={v.army} />
-            {wan(v.tribOut) > 0 && <Line k="纳贡" note="交给宗主" n={v.tribOut} />}
+            <Line m={m} k="养官" n={v.office} />
+            <Line m={m} k="军费" note={armyNote} n={v.army} />
+            {wan(v.tribOut) > 0 && <Line m={m} k="纳贡" note="交给宗主" n={v.tribOut} />}
           </div>
         </section>
         <section className="cp-sec">
@@ -217,7 +220,7 @@ export function FiscalPage({ civ, id, year }: { civ: Civ; id: number; year: numb
               .filter(({ i }) => counts[i] > 0 || v.keptBy[i] > 0.5)
               .sort((a, b) => v.keptBy[b.i] - v.keptBy[a.i])
               .map(({ t, i }) => (
-                <Line key={t} k={t} note={i === 3 ? `${counts[i]} 州,一文不交` : `${counts[i]} 州`} n={v.keptBy[i]} dot={rgb(CONTROL_COLORS[i] as [number, number, number])} />
+                <Line m={m} key={t} k={t} note={i === 3 ? `${counts[i]} 州,一文不交` : `${counts[i]} 州`} n={v.keptBy[i]} dot={rgb(CONTROL_COLORS[i] as [number, number, number])} />
               ))}
           </div>
         </section>

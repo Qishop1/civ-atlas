@@ -17,6 +17,7 @@
  * 撞名(和已经起好的名字重复)时换这个键的下一个候选,谁先占按锚点地块编号从小到大 —— 也和生成先后无关。
  * 种子来自 subSeed(seed, 'civ-names…'),其余随机数用 keyed。
  */
+import { homeworldName } from './homeworld';
 import { createNamer, createPersonNamer, mixStyles, NAME_STYLES, type GeneratedName, type NameMix, type Namer, type PersonNamer } from '../names';
 import { BIOMES } from '../biomes';
 import type { Culture, CultureKind, MigrationDir, Polity, Settlement, Year } from './types';
@@ -521,6 +522,9 @@ export function namePolities(seed: number, polities: Polity[], cultures: Culture
     } else if (kind === 0) claim(p.name);
     if (p.dynasties?.[i]) dyn(p, i, styleOf(p), taken, takenBare);
   }
+  // 本地分支 modern-pace 第六十三轮:成立了星球联邦的国家,按盟主民族的语感给母星起名(联邦叫"某某联邦";推演时语感还没定,在这里起)
+  for (const p of polities)
+    if (p.federation !== undefined && !p.homeworld) p.homeworld = homeworldName(seed, cultures[p.culture]?.style ?? '', (n) => taken.has(n) || takenBare.has(bare(n)));
 }
 
 /** "大安" → "安"(中式国号里"安"和"大安"算同一个名字);别的原样 */

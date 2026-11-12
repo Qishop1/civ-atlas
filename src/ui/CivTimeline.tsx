@@ -23,6 +23,7 @@
  *   第 0 年到原来的结束年份照样能拖、能放,新的一段推好以前拖不进去;正在放的照常放到原来的结束年份停,推好时还在放就接着放进新的一段。
  *   推完以后刚推的那段垫一道浅蓝(这次打开网页里一直标着,换了世界不标)。
  */
+import { useSpaceUi } from './spaceStore';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Civ, Polity } from '../gen/civ/types';
 import { polityName } from '../gen/readers/openQuery';
@@ -142,6 +143,9 @@ export function CivTimeline({ civ, hidden, dock = 'bottom', directorOff, extendO
     return list.length ? list.map((p) => ({ year: p.year, end: p.end, name: `${civ!.settlements[p.settlement]?.name || (p.region >= 0 ? regionLabel(civ!, p.region) : '') || '一城'}大疫` })) : undefined;
   }, [civ, has]);
 
+  const spaceUi = useSpaceUi();
+  const sysOn = spaceUi.system !== null;
+  const astro = spaceUi.astro;
   // 播放:每帧按真实流逝的时间推进年份(导出视频的时长、片头片尾、年份变了,关掉面板,都按新的速度和终点接着放)
   useEffect(() => {
     if (!t.playing) return;
@@ -153,7 +157,8 @@ export function CivTimeline({ civ, hidden, dock = 'bottom', directorOff, extendO
     if (t.story) setCivShow({ cultures: true, polities: true, faiths: false, eras: false, control: false, ideology: false, resources: false });
     const fm = getFilm();
     const span = fm.mode === 'video' && civ ? filmRangeOf(civ) : null;
-    const rate = t.story ? end / STORY_SECONDS : span ? filmClock(span, fm.seconds, fm.cards).rate : playRate(t.speed, end);
+    // 本地分支 modern-pace:恒星系视图开着时按天文档走(每秒几小时到几十天),历史档照常
+    const rate = t.story ? end / STORY_SECONDS : span ? filmClock(span, fm.seconds, fm.cards).rate : sysOn && astro !== null ? astro : playRate(t.speed, end);
     const stop = span ? span.to : end;
     let last = performance.now();
     let raf = 0;
@@ -172,7 +177,7 @@ export function CivTimeline({ civ, hidden, dock = 'bottom', directorOff, extendO
     };
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
-  }, [t.playing, t.story, t.speed, has, end, civ, film.mode, film.seconds, film.cards, film.rangeKind, film.range, directed]);
+  }, [t.playing, t.story, t.speed, has, end, civ, film.mode, film.seconds, film.cards, film.rangeKind, film.range, directed, sysOn, astro]);
 
   if (!has || hidden) return null;
 

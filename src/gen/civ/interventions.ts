@@ -700,6 +700,8 @@ export function installInterventions(sim: CivSim, iv: InterventionModel): void {
       if (c >= 0) sim.record('intervene', { a: -1, b: cultures[c].ended !== undefined ? -3 : -1, war: i, n: c });
       return;
     }
+    // 本地分支 modern-pace:月面着陆点只改编年史(spaceText.ts),推演不管
+    if (v.kind === 'moonsite') return;
     const a = iv.resolve(v.a);
     if (a < 0) return; // 键指不到:这条干预在新历史里没有对象
     if (v.kind === 'cede') {

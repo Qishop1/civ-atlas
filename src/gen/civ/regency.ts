@@ -20,7 +20,7 @@
 import type { Civ, Polity, Year } from './types';
 import { Layer } from './types';
 import { quantize, type CivSim } from './engine/sim';
-import { bookOf, dynastyReign, polityModelOf, regencyCtx, rulerOf, type PolityModel } from './polities';
+import { bookOf, dynastyReign, modernSteps, polityModelOf, regencyCtx, rulerOf, type PolityModel } from './polities';
 import { warModelOf, type War } from './wars';
 import { dynastyModelOf } from './dynasty';
 import { capitalAt } from './growth';
@@ -160,6 +160,12 @@ function hook(sim: CivSim, pm: PolityModel): RegencyModel {
     if (kept >= 0) {
       sim.record('keep', { a: P.id, b: KEEP_REGENT, ...cap, war: kept, n: 0 });
       note(g.kind === 'uncle' || g.kind === 'march' || g.kind === 'heir' ? RG_RETURN : RG_PURGE);
+      return;
+    }
+    // 本地分支 modern-pace 第二十三轮:国都进了电气时代以后,宫廷里废君自立行不通了(议会、军队、报纸都不认):到期交还大权。
+    // 要夺权的走政变(reform.ts 的 coup)。只看 P.modern,接着推也一样;作者下令"让他掌权"的照作者的
+    if (g.iv === undefined && modernSteps(P, t) >= 2) {
+      note(RG_RETURN);
       return;
     }
     if (g.kind === 'uncle' || g.kind === 'march' || g.kind === 'heir') {

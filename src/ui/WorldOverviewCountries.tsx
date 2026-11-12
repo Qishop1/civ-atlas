@@ -284,7 +284,7 @@ export function countryRows(civ: Civ, y: number, deadN = Infinity): { alive: Cou
 
 /** 表格里的人口:"5642 万""900 人"(和国家卡片同样取整,不带"约") */
 export function popCell(pop: number): string {
-  return pop > 0 ? populationLabel(pop).replace(/^约 /, '').replace(/万人$/, '万') : '—';
+  return pop > 0 ? populationLabel(pop).replace(/^约 /, '').replace(/(万|亿)人$/, '$1') : '—';
 }
 
 /** 一串国名:两个以内全写,多了写"甲、乙 等 5 国" */

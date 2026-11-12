@@ -14,6 +14,16 @@ import type { Civ, Route } from '../../gen/civ/types';
 import type { Mesh } from '../../gen/mesh';
 import { addToPath, chaikin, cullLines, meshWrap, unwrapLine, type Polyline } from './lines';
 import type { CivDrawParams, CivStyle } from './overlay';
+import { refineRoad, terrainOf } from './roadDetail';
+import type { Raster } from '../../gen/raster';
+
+const terrains = new WeakMap<Raster, ReturnType<typeof terrainOf>>();
+/** 同一张栅格只建一次取地形的函数 */
+export function terrainCached(raster: Raster, worldW: number): ReturnType<typeof terrainOf> {
+  let t = terrains.get(raster);
+  if (!t) terrains.set(raster, (t = terrainOf(raster, worldW)));
+  return t;
+}
 
 type Kind = Route['kind'];
 
@@ -89,6 +99,10 @@ interface RouteCache {
   ended: Float64Array;
   key: string;
   lines: RouteLines;
+  /** 按地形细化过的那一份(第五十五轮)和细化结果的缓存 */
+  keyR: string;
+  linesR: RouteLines;
+  refined: Map<string, Float32Array>;
 }
 const caches = new WeakMap<Civ, RouteCache>();
 
@@ -103,8 +117,12 @@ function countAtMost(sorted: Float64Array, v: number): number {
   return lo;
 }
 
-/** 这一年看得见的路,串好、平滑好的折线 */
-export function routeLines(mesh: Mesh, civ: Civ, year: number = Infinity): RouteLines {
+/**
+ * 这一年看得见的路,串好、平滑好的折线。
+ * 本地分支 modern-pace 第五十五轮:给了地形(T,roadDetail.terrainOf)的,陆路先按地形细化(绕山、沿河谷,不再是地块中心连成的长直线)再抹一遍;
+ * 细化结果按折线缓存(回放时路网只多不少,已经细化过的不重算)
+ */
+export function routeLines(mesh: Mesh, civ: Civ, year: number = Infinity, T?: ReturnType<typeof terrainOf>): RouteLines {
   let c = caches.get(civ);
   if (!c) {
     // 城:有城镇时是城镇,没有时是各州治所
@@ -117,10 +135,35 @@ export function routeLines(mesh: Mesh, civ: Civ, year: number = Infinity): Route
       ended: Float64Array.from(civ.routes.map((r) => r.abandoned ?? Infinity)).sort(),
       key: '',
       lines: { road: [], trail: [], sea: [] },
+      keyR: '',
+      linesR: { road: [], trail: [], sea: [] },
+      refined: new Map(),
     };
     caches.set(civ, c);
   }
   const key = `${countAtMost(c.built, year)}|${countAtMost(c.ended, year)}`;
+  if (T) {
+    if (key !== c.keyR) {
+      const live = civ.routes.filter((r) => r.built <= year && !((r.abandoned ?? Infinity) <= year));
+      const refine = (kind: Kind) =>
+        chains(mesh, live, kind, c!.stops).map((l) => {
+          // 按相邻两块地之间的一小段缓存(路网变了、串法变了,已经细化过的段落不重算)
+          const p = l.pts;
+          const out: number[] = [p[0], p[1]];
+          for (let i = 1; i < p.length / 2; i++) {
+            const x0 = p[(i - 1) * 2], y0 = p[(i - 1) * 2 + 1], x1 = p[i * 2], y1 = p[i * 2 + 1];
+            const k = `${kind}|${x0.toFixed(2)},${y0.toFixed(2)}|${x1.toFixed(2)},${y1.toFixed(2)}`;
+            let r = c!.refined.get(k);
+            if (!r) c!.refined.set(k, (r = refineRoad([x0, y0, x1, y1], T, kind === 'road' ? 1 : 2)));
+            for (let j = 2; j < r.length; j++) out.push(r[j]);
+          }
+          return chaikin({ pts: Float32Array.from(out), closed: false }, 1);
+        });
+      c.linesR = { road: refine('road'), trail: refine('trail'), sea: chains(mesh, live, 'sea', c.stops).map((l) => chaikin(l, 3)) };
+      c.keyR = key;
+    }
+    return c.linesR;
+  }
   if (key !== c.key) {
     const live = civ.routes.filter((r) => r.built <= year && !((r.abandoned ?? Infinity) <= year));
     const stops = c.stops;
@@ -136,7 +179,7 @@ export function drawRoutes(ctx: CanvasRenderingContext2D, p: CivDrawParams): voi
   const S = p.raster.scale;
   // 线宽、虚线长短(细节层按屏幕重画时 × pen,见 overlay.ts)
   const P = S * (p.pen ?? 1);
-  const lines = routeLines(p.world.mesh, p.civ, p.year);
+  const lines = routeLines(p.world.mesh, p.civ, p.year, terrainCached(p.raster, p.world.width));
   const wrap = meshWrap(p.world.mesh);
   const path = (ls: Polyline[]) => {
     const pa = new Path2D();

@@ -46,6 +46,7 @@ import { KM_PER_UNIT, REF_CELLS } from './scale';
 import { dynastyIndexAt, polityRootAt } from './polityRoot';
 import { hasReform, reformedSeg, titleSeg } from './regime';
 import { isNameToken, nameForm, type RootShape } from './nameToken';
+import { federationName } from './homeworld';
 
 // 某一年是第几朝、那年的国名词根在 polityRoot.ts(存档里的改名只用得到这几样);原来从这里 import 的照旧能用
 export { dynastyAt, dynastyIndexAt, polityRootAt } from './polityRoot';
@@ -210,7 +211,7 @@ export const RURAL_SLUMP = 1;
 
 /** 城里折损一成时乡下跟着折损几成:瘟疫 RURAL_PLAGUE、疫后凋敝 RURAL_SLUMP,别的(洗劫、饥荒、地震水旱)RURAL_WAR */
 export function ruralShare(cause: string | undefined): number {
-  return cause === 'plague' ? RURAL_PLAGUE : cause === 'slump' ? RURAL_SLUMP : RURAL_WAR;
+  return cause === 'plague' ? RURAL_PLAGUE : cause === 'slump' ? RURAL_SLUMP : cause === 'winter' ? RURAL_WINTER : RURAL_WAR;
 }
 
 /**
@@ -310,6 +311,8 @@ export const RURAL_EXP = 3;
 export const RURAL_WAR = 0.3;
 /** 瘟疫(plague.ts)时乡村折损城里那一成的几成:疫气城乡都染,乡下人稀,死得少一些 */
 export const RURAL_PLAGUE = 0.7;
+/** 本地分支 modern-pace 第六十四轮:核冬天的饥荒,城乡一样饿死(nuclearWinter.ts) */
+export const RURAL_WINTER = 1;
 /** 一个世界单位² 是多少平方公里 */
 const KM2_PER_UNIT2 = KM_PER_UNIT * KM_PER_UNIT;
 /** 默认精细度下一块地的面积(世界单位²;同 geo.ts 的 refCellArea:主图 2048 × 1024 按默认精细度分)。州的人口上限之和按它折算 */
@@ -483,6 +486,8 @@ export function ruinSites(civ: Civ, year: Year): Settlement[] {
 
 /** 人口的说法:"约 3.2 万人"、"约 4000 人" */
 export function populationLabel(pop: number): string {
+  // 本地分支 modern-pace 第二十八轮:一亿以上写"约 17 亿人"(一百亿以下留一位小数)
+  if (pop >= 1e5) return `约 ${(pop / 1e5).toFixed(pop >= 1e6 ? 0 : 1).replace(/\.0$/, '')} 亿人`;
   if (pop >= 10) return `约 ${(pop / 10).toFixed(pop >= 100 ? 0 : 1).replace(/\.0$/, '')} 万人`;
   const n = Math.max(100, Math.round(pop * 10) * 100);
   return `约 ${n} 人`;
@@ -693,7 +698,27 @@ export function polityTierAt(p: Polity, year: Year): number {
 /** 某一年的全称("索拉特王国"、"大昌王朝");还没立国 = 词根 */
 export function polityName(p: Polity, year: Year): string {
   const tier = polityTierAt(p, year);
-  return tier < 0 ? p.name : polityTitles(p, year)[tier];
+  return modernTitle(p, year, tier < 0 ? p.name : polityTitles(p, year)[tier], tier);
+}
+
+/**
+ * 本地分支 modern-pace:国都进了工业以后(Polity.modern),国号换成近现代的说法 ——
+ * 王朝、皇朝 → 帝国;大汗国 → 帝国、汗国 → 王国;部 → 国;电气以后的大共和国(第 3 档)→ 联邦共和国。
+ * 只改显示的名字(这些字地图字体里都有),不改推演。还没进工业的国家照旧。
+ */
+export function modernTitle(p: Pick<Polity, 'modern' | 'modernName' | 'federation' | 'homeworld'>, year: Year, name: string, tier: number): string {
+  // 本地分支 modern-pace 第二十六轮:星球联邦(第六十三轮起按母星名叫"某某联邦")
+  if (p.federation !== undefined && p.federation <= year) return federationName(p);
+  let steps = 0;
+  if (p.modern) for (const t of p.modern) if (t <= year) steps++;
+  if (!steps && p.modernName !== undefined && p.modernName <= year) steps = 1;
+  if (!steps) return name;
+  if (name.endsWith('皇朝') || name.endsWith('王朝')) return `${name.slice(0, -2)}帝国`;
+  if (name.endsWith('大汗国')) return `${name.slice(0, -3)}帝国`;
+  if (name.endsWith('汗国')) return `${name.slice(0, -2)}王国`;
+  if (name.endsWith('部')) return `${name.slice(0, -1)}国`;
+  if (steps >= 2 && tier >= 3 && name.endsWith('共和国') && !name.endsWith('联邦共和国')) return `${name.slice(0, -3)}联邦共和国`;
+  return name;
 }
 
 /**

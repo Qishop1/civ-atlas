@@ -5,6 +5,10 @@
  *   创教、教派分立是大事(重要度 3);当年州数前五的国家立国教是 2;小国立国教、传入是 1。
  *   不放进 buildChronicle(那里只有史事,AI 的材料用它);编年史、时间轴、卡片里的大事用 fullChronicle(史事 + 继位以外的宗教大事)。
  */
+import { renameEntries } from './cityNames';
+import { beltEntries } from './cityBelts';
+import { scienceEntries } from './science';
+import { orbitEntries } from './orbitText';
 import type { Civ, Faith, FaithEvent, FaithEventKind, FaithForm, Year } from '../types';
 import { polityName } from '../growth';
 import { ownersAt, type Owners } from '../engine/timeline';
@@ -151,7 +155,15 @@ export function* fullChronicleSteps(civ: Civ): Generator<void, ChronicleEntry[]>
   yield;
   const trade = mergeChronicle(dev, tradeEntries(civ));
   yield;
-  const thought = mergeChronicle(trade, ideologyEntries(civ));
+  const thought0 = mergeChronicle(trade, ideologyEntries(civ));
+  // 本地分支 modern-pace 第五十七轮:城市改名
+  const thought1 = mergeChronicle(thought0, renameEntries(civ, civ.annals.length * 4 + 7_000_000));
+  // 本地分支 modern-pace 第六十轮:城市带(连片、并为区、散了)
+  const thought2 = mergeChronicle(thought1, beltEntries(civ, civ.annals.length * 4 + 8_000_000));
+  // 本地分支 modern-pace 第六十五轮:科学史
+  const thought3 = mergeChronicle(thought2, scienceEntries(civ, civ.annals.length * 4 + 9_000_000));
+  // 本地分支 modern-pace 第六十六轮:收太空垃圾、轨道封锁的清理进度
+  const thought = mergeChronicle(thought3, orbitEntries(civ, civ.annals.length * 4 + 10_000_000));
   const out = civ.simChronicle?.length ? mergeChronicle(thought, pluginEntries(civ, thought)) : thought;
   const again = fullCache.get(civ);
   if (again) return again;

@@ -44,7 +44,8 @@ export interface GlobeFrame {
   R: number;
 }
 
-export const GLOBE_K_MIN = 0.55;
+// 本地分支 modern-pace 第三十六轮:0.55 → 0.12,缩小了看得到同步轨道上的整圈轨道环(半径 6.6 个地球半径)
+export const GLOBE_K_MIN = 0.12;
 export const GLOBE_K_MAX = 8;
 /** 缩放 1 倍时球的半径 = 舞台短边 × 这个比例 */
 export const GLOBE_FILL = 0.43;

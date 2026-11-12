@@ -6,6 +6,7 @@
  * 随机数一律从 subSeed(seed, 'civ-…') 取(见 rand.ts),不用 Math.random。seed 是文明种子(params.civSeed):
  * 没给 = 地图种子(world.params.seed),和加这一项以前逐字节一样;给了 = 同一张地图上另一段历史(州、民族、国家、名字……都另起)。
  */
+import { setCivMesh } from './story/civMesh';
 import type { Progress, World } from '../world';
 import type { ChangeLog, Civ, CivBase, CivParams } from './types';
 import { computeHabitat } from './habitat';
@@ -36,7 +37,10 @@ export function civBase(world: World, params: Partial<CivParams> = {}): CivBase 
 
 /** 照官方规则包从第 0 年一口气推到 params.endYear */
 export function generateCiv(world: World, params: Partial<CivParams> = {}, progress: Progress = () => {}): Civ {
-  return runPack(OFFICIAL_PACK, world, params, progress);
+  const civ = runPack(OFFICIAL_PACK, world, params, progress);
+  // 本地分支 modern-pace 第六十轮:城市带要量距离,记下这份历史对应的网格(story/civMesh.ts)
+  setCivMesh(civ, world);
+  return civ;
 }
 
 /** generateCiv 拆成几段推:停在哪一刻、停几次,推完和 generateCiv 逐字节一样(地形大事的世界也一样) */

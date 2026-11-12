@@ -84,6 +84,9 @@
  * 随机数:keyed(subSeed(seed, 'civ-war'), 国家…, 第几次, 用途);一场战争里的随机数按"攻方 + 守方 + 宣战时刻 + 第几仗"取,
  * 和处理顺序、战争编号都无关。国家、州一律用位置锚(PolityModel.ptag、治所地块;见 rand.ts),不用编号。纯计算,不碰 DOM。
  */
+import { ASAT_BIG, ASAT_NUKE_P, ASAT_P, BLOCK_MIN, BLOCK_SPAN, CASCADE_NUKE_P, CASCADE_NUKE_P_BOTH, CASCADE_P, SEVER_P, TOWER_CUT, blockedAt } from './orbit';
+import { FAMINE_TAIL, WINTER_FAMINE_N, WINTER_SHATTER, WINTER_SHATTER_MIN, famineLoss, winterSeverity } from './nuclearWinter';
+import { unrestModelOf } from './unrest';
 import type { World } from '../world';
 import { coldShare, coldSpellEnd, yearClimate } from '../seasons';
 import { AdjKind, Layer, type Annal, type AnnalCause, type Civ, type Polity, type Year } from './types';
@@ -101,6 +104,10 @@ import { royalAt } from './regime';
 import type { CivModule } from './modules';
 import { Ev } from './events';
 import { civApi } from './api';
+import { modernSteps } from './polities';
+import { eraNowAt, inventedHere } from './development';
+import { SPACE_NAV, SPACE_RECON, SUPPORT_EDGE, oobEdge, pickOob, pickSupport, spaceEdge, type OobTerrain } from './oob';
+import { biomeTagged } from '../biomes';
 import { defineKnobs } from './engine/knobs';
 import { mulOf } from './influence';
 
@@ -280,6 +287,21 @@ const U_STAND_END = 14;
 const U_REVENGE = 15;
 const U_THAW = 16;
 const U_CHAIN = 17;
+/** 本地分支 modern-pace 第十六轮:核打击的随机数用途 */
+const U_NUKE = 9201;
+/** 本地分支 modern-pace 第二十轮:战略核的随机数用途 */
+const U_ICBM = 9202;
+const U_INTERCEPT = 9203;
+const U_YIELD = 9204;
+const U_RETALIATE = 9205;
+/** 本地分支 modern-pace 第二十五轮:逐级升级、同盟报复、战术核的当量 */
+const U_ESC = 9206;
+const U_ALLYNUKE = 9207;
+const U_TAC = 9208;
+/** 本地分支 modern-pace 第六十四轮:核冬天的轻重、各城的饥荒 */
+const U_WINTER = 9209;
+/** 本地分支 modern-pace 第六十六轮:反卫星、连锁碎片(orbit.ts) */
+const U_ORBIT = 9210;
 
 // ---------------------------------------------------------------------------
 // 模型
@@ -321,6 +343,14 @@ export interface WarModel {
   iv?: InterventionModel;
   /** 邦交(diplomacy.ts 挂上):结着的盟、宗藩之分在这里查 */
   dm?: DiplomacyModel;
+  /** 本地分支 modern-pace 第二十四轮:最近一次动用核武器的年份(核禁忌;从史事 nuke n = 1、2 重建) */
+  lastNuke: Year;
+  /** 本地分支 modern-pace 第二十四轮:军控条约的年份(史事 nuke n = 3) */
+  armsCuts: Year[];
+  /** 本地分支 modern-pace 第二十四轮:核冬天 [起, 止)(史事 nuke n = 4;没有 = null);unrest.ts 的饥荒看它 */
+  winter: { from: Year; until: Year } | null;
+  /** 本地分支 modern-pace 第二十五轮:首先动用核武器的国家 → 那一年(众矢之的;从每一次核交换的第一条 nuke 重建) */
+  pariah: Map<number, Year>;
   // 别的子系统挂给战争、战争提供给别人的回调(攻城、立约、钱粮、动荡……)不在这里,在具名接口表 civ/api.ts 的 war 那一组
 }
 
@@ -384,6 +414,10 @@ function newModel(pm: PolityModel): WarModel {
     rest: new Map(),
     truce: new Map(),
     grudge: new Map(),
+    lastNuke: -Infinity,
+    armsCuts: [],
+    winter: null,
+    pariah: new Map(),
   };
 }
 
@@ -487,13 +521,63 @@ export function installWars(sim: CivSim, pm: PolityModel, world: World, wm: WarM
 
   const warsOf = (p: number) => wm.active.filter((w) => w.a === p || w.b === p);
 
+  /**
+   * 本地分支 modern-pace:亮全图 —— 国都那州有了人造卫星的国家(太空强国)能打到全世界任何沿海的州,
+   * 只对比自己落后 SPACE_GAP 档以上的国家(殖民落后大陆,不是全面开战)
+   */
+  const capEra = (p: number, t: number): number => Math.max(0, eraNowAt(sim, pm.settlements[capitalAt(pm.polities[p], t)]?.region ?? -1));
+  const spacePower = (p: number, t: number): boolean => inventedHere(sim, pm.settlements[capitalAt(pm.polities[p], t)]?.region ?? -1, '人造卫星');
+  const spaceTarget = (x: number, y: number, t: number): boolean => spacePower(x, t) && capEra(x, t) - capEra(y, t) >= SPACE_GAP;
+
+  /** 本地分支 modern-pace:x 打 y 的州 r 这一仗双方出什么编制(oob.ts;不用随机数,同一仗算几次都一样) */
+  const OOB_FOREST = biomeTagged('forest');
+  const matchup = (x: number, y: number, r: number, def: number, t: number): { ca: number; cb: number; sa: number; sb: number; spA: number; spB: number; terr: OobTerrain; real: boolean; ex: number; ey: number } => {
+    const capR = (p: number) => pm.settlements[capitalAt(pm.polities[p], t)]?.region ?? -1;
+    const ex = Math.max(0, eraNowAt(sim, capR(x)));
+    const ey = Math.max(0, eraNowAt(sim, capR(y)));
+    const via = Math.max(0, wm.k.DEFENSE.indexOf(def)) as AdjKind;
+    const terr: OobTerrain = { open: !OOB_FOREST[reg.biome[r]] && reg.elevation[r] < 1500, via, coastal: pm.terrain.coastal[r] === 1 };
+    const salt = r * 7 + Math.floor(t);
+    const ca = pickOob(ex, pm.polities[x].kind, terr, true, salt);
+    const cb = pickOob(ey, pm.polities[y].kind, terr, false, salt + 3);
+    // 天基支援:国都那州有侦察卫星、卫星导航的(本地分支 modern-pace 第九轮)
+    const space = (p: number) => {
+      const cr = capR(p);
+      return (inventedHere(sim, cr, '侦察卫星') ? SPACE_RECON : 0) | (inventedHere(sim, cr, '卫星导航') ? SPACE_NAV : 0);
+    };
+    return { ca, cb, sa: pickSupport(ca, terr), sb: pickSupport(cb, terr), spA: space(x), spB: space(y), terr, real: ex >= 4 || ey >= 4, ex, ey };
+  };
+  /** 本地分支 modern-pace:记进史事的编制:[攻方, 守方, 攻方出几个(按这一仗的胜率:≥ 0.9 三个,≥ 0.7 两个,不然一个)] */
+  const oobOf = (x: number, y: number, r: number, def: number, t: number, p: number): number[] => {
+    const mu = matchup(x, y, r, def, t);
+    return [mu.ca, mu.cb, p >= 0.9 ? 3 : p >= 0.7 ? 2 : 1, mu.sa, mu.spA, mu.sb, mu.spB];
+  };
+
   /** x 攻打 y 的州 r(r 挨着 x 的国土,def = 攻方最好打的那条边的过界难度):胜率 */
   const chance = (x: number, y: number, r: number, def: number, t: number, pow: Float64Array, w?: War): number => {
     const X = pm.polities[x];
     const Y = pm.polities[y];
     // 军力系数高(动员能力强、走得远)的国家远征打折少:强国越打越远,能滚雪球
-    let sx = pow[x] * fexp(-reachOf(wm, x)[r] / (PROJECT * (pm.military?.[x] ?? 1)));
-    let sy = pow[y] * fexp(-reachOf(wm, y)[r] / (PROJECT * (pm.military?.[y] ?? 1))) * def;
+    // 本地分支 modern-pace:国都进了几档近现代(工业、电气、信息);铁路、汽车让远征打折少(WAR_REACH),技术代差直接乘兵力(TECH_GAP)
+    const mx = modernSteps(X, t);
+    const my = modernSteps(Y, t);
+    const rx = spaceTarget(x, y, t) ? Math.min(SPACE_REACH, reachOf(wm, x)[r]) : reachOf(wm, x)[r];
+    let sx = pow[x] * fexp(-rx / (PROJECT * (pm.military?.[x] ?? 1) * (1 + WAR_REACH * mx)));
+    let sy = pow[y] * fexp(-reachOf(wm, y)[r] / (PROJECT * (pm.military?.[y] ?? 1) * (1 + WAR_REACH * my))) * def;
+    // 本地分支 modern-pace:编制相克 + 技术代差(一方到了火药时代以后才算;古代只在编年史里写)。
+    // 代差按两国国都的时代差(整档),每差一档先进的一方兵力 × TECH_GAP:骑兵打不过无人装甲集群
+    const mu = matchup(x, y, r, def, t);
+    if (mu.real) {
+      for (let g = Math.floor(mu.ex) - Math.floor(mu.ey); g > 0; g--) sx *= TECH_GAP;
+      for (let g = Math.floor(mu.ey) - Math.floor(mu.ex); g > 0; g--) sy *= TECH_GAP;
+      sx *= oobEdge(mu.ca, mu.cb, mu.terr);
+      sy *= oobEdge(mu.cb, mu.ca, mu.terr);
+      // 协同、天基支援(本地分支 modern-pace 第九轮)
+      if (mu.sa >= 0) sx *= SUPPORT_EDGE;
+      if (mu.sb >= 0) sy *= SUPPORT_EDGE;
+      if (mu.spA) sx *= spaceEdge(mu.spA);
+      if (mu.spB) sy *= spaceEdge(mu.spB);
+    }
     // 士气(讨伐民变:见 接口 war.morale)
     if (w && api.war.morale) {
       sx *= api.war.morale(w, x, t);
@@ -547,6 +631,8 @@ export function installWars(sim: CivSim, pm: PolityModel, world: World, wm: WarM
     const want = !retake && x === w.a && api.war.wantOf && api.war.resOf ? api.war.wantOf(x).want : 0;
     for (const r of pm.lands[y]) {
       if (t - wm.since[r] < hold || r === graceR || r === guardR) continue;
+      // 本地分支 modern-pace 第十六轮:有核国家的国都打不下(核威慑)
+      if (nuclear(y, t) && r === pm.settlements[capitalAt(Y, t)]?.region) continue;
       if (wm.iv?.locked(r, t)) continue; // 阶段 4 干预:永久划给它的州攻不下
       if (guardR >= 0 && nextTo(r, guardR, Y, t)) continue;
       if (lost && !lost.has(r) && wm.prev[r] !== x) continue;
@@ -561,6 +647,8 @@ export function installWars(sim: CivSim, pm: PolityModel, world: World, wm: WarM
           if (DEFENSE[kind] < def) def = DEFENSE[kind];
         }
       }
+      // 本地分支 modern-pace:太空强国打落后国家,沿海的州不接壤也能直接登陆
+      if (def === Infinity && pm.terrain.coastal[r] === 1 && spaceTarget(x, y, t)) def = DEFENSE[AdjKind.SeaRoute];
       if (def === Infinity) continue;
       const frac = tot > 0 ? att / tot : 0.5;
       const toward = dy[r] < Infinity ? fexp(-dy[r] / PROJECT) : 0;
@@ -687,13 +775,13 @@ export function installWars(sim: CivSim, pm: PolityModel, world: World, wm: WarM
    * x 攻占 y 的州 r。返回 true = 拿下的是 y 的国都。
    * assault = 战役里打下来的(阶段 3 城市兴衰:城可能被洗劫、被毁,见 接口 war.onAssault;议和时割让的不算)
    */
-  const take = (w: War, x: number, y: number, r: number, t: number, assault = false): boolean => {
+  const take = (w: War, x: number, y: number, r: number, t: number, assault = false, oob?: number[]): boolean => {
     const Y = pm.polities[y];
     const capital = pm.settlements[capitalAt(Y, t)].region === r;
     const city = pm.cityOf[r];
     sim.setOwner(Layer.Polity, r, x, Ev.Conquer);
     if (assault && city >= 0) api.war.onAssault?.(w, x, y, r, city, t, capital);
-    sim.record('conquer', { a: x, b: y, region: r, settlement: city, war: w.id });
+    sim.record('conquer', { a: x, b: y, region: r, settlement: city, war: w.id, oob });
     w.takes.push({ year: t, region: r, by: x });
     if (!capital) return false;
     if (pm.size[y] <= 0) {
@@ -770,6 +858,8 @@ export function installWars(sim: CivSim, pm: PolityModel, world: World, wm: WarM
     // 为夺物产:region 列记由头里那一州,n 列记想要的物产(按位);乘内乱、为掠夺而战:region 列记割据的那州、要掠的富州
     sim.record('war', { a: x, b: y, war: w.id, ...(ally >= 0 ? { settlement: ally } : {}), ...(cause ? { cause } : {}), ...(res ? { region: res.region, ...(res.want ? { n: res.want } : {}) } : {}) });
     sim.schedule(t + gapOf(wm, w, 0), Ev.Campaign, 0, w.id);
+    // 第六十六轮:两国都有卫星的,开战时可能先互打卫星(orbit.ts);援盟的不再掷
+    if (ally < 0) asatAtWar(w, t, false);
     // 阶段 4 干预的结盟:y 被宣战,它的盟国(和 x 接壤、没和 x 结盟、和 x 没有宗藩之分、没在和 x 打)有 ALLY_JOIN 的机会援盟
     const iv = wm.iv;
     if (iv && ally < 0) {
@@ -821,6 +911,20 @@ export function installWars(sim: CivSim, pm: PolityModel, world: World, wm: WarM
         f.set(j, Math.min(f.get(j) ?? Infinity, DEFENSE[kind]));
       }
     }
+    // 本地分支 modern-pace:亮全图 —— 太空强国把全世界比自己落后 SPACE_GAP 档以上、有沿海州的国家都算进来(边界按沿海州数)
+    if (spacePower(p, t)) {
+      for (const Q of pm.polities) {
+        const q = Q.id;
+        if (q === p || Q.ended !== undefined || border.has(q) || !pm.lands[q]?.length || !spaceTarget(p, q, t)) continue;
+        let f: Map<number, number> | undefined;
+        for (const j of pm.lands[q]) {
+          if (pm.terrain.coastal[j] !== 1) continue;
+          if (!f) front.set(q, (f = new Map()));
+          f.set(j, DEFENSE[AdjKind.SeaRoute]);
+          border.set(q, (border.get(q) ?? 0) + 1);
+        }
+      }
+    }
     if (!border.size) return;
     const pow = powers(t, [p, ...border.keys()]);
     const dm = wm.dm;
@@ -846,7 +950,8 @@ export function installWars(sim: CivSim, pm: PolityModel, world: World, wm: WarM
       const Q = pm.polities[q];
       if (Q.ended !== undefined || t - (wm.truce.get(pairKey(p, q)) ?? -Infinity) < TRUCE) continue;
       // 分裂 / 复国出来的国家有 NEWBORN 年的站稳期:不会一出生就被吞掉
-      if (Q.parent !== undefined && t - Q.founded < NEWBORN) continue;
+      // 本地分支 modern-pace:电气以后的国家承认新独立国家的主权更久(NEWBORN_MODERN)
+      if (Q.parent !== undefined && t - Q.founded < (modernSteps(P, t) >= 2 ? NEWBORN_MODERN : NEWBORN)) continue;
       const qw = warsOf(q);
       if (qw.length >= MAX_WARS || qw.some((v) => v.a === p || v.b === p)) continue;
       // 阶段 4 干预:不打盟国;不许灭的国家只剩几州时没什么可打的
@@ -873,6 +978,17 @@ export function installWars(sim: CivSim, pm: PolityModel, world: World, wm: WarM
       for (const [y, def] of front.get(q)!) sum += chance(p, q, y, def, t, pow);
       const pbar = sum / front.get(q)!.size;
       let o = WAR_ODDS * P.expansionism * fpow(pbar / (1 - pbar), LOCAL_EXP) * Math.sqrt(Math.min(1, n / BORDER_FULL));
+      // 本地分支 modern-pace:近现代的国际规范,兼并战争少一些(电气 ×0.6、信息以后 ×0.4)
+      o *= MODERN_NORM[Math.min(3, modernSteps(P, t))];
+      // 本地分支 modern-pace 第十六轮:核威慑
+      if (nuclear(q, t)) o *= nuclear(p, t) ? NUKE_MAD : NUKE_DETER;
+      // 第二十五轮:首先动用过核武器的国家,几十年里各国更愿意讨伐它
+      const pq = wm.pariah.get(q);
+      if (pq !== undefined && t - pq < PARIAH_YEARS) o *= PARIAH_ODDS;
+      // 第二十六轮:地球联邦打没加入的国家(统一战争)
+      if (P.federation !== undefined) o *= FED_WAR;
+      // 第三十一轮:公投脱离出去的国家,联邦百年里不太去打它
+      if (P.federation !== undefined && Q.parent === P.id && t - Q.founded < 100) o *= 0.2;
       if (Q.culture !== P.culture) o *= FOREIGN;
       o *= 1 + REVANCHE * Math.min(4, claims(q));
       // 小国(一场仗就能吞下)格外招人
@@ -1061,6 +1177,252 @@ export function installWars(sim: CivSim, pm: PolityModel, world: World, wm: WarM
     return true;
   };
 
+  /** 本地分支 modern-pace:时代每高一档(一方到了火药以后才算),本方兵力 × TECH_GAP(胜率按平方算,一档约 2.6 倍赔率);远征打折的路程每进一档近现代放宽 WAR_REACH */
+  const TECH_GAP = 1.6;
+  /** 本地分支 modern-pace 第十六轮:核威慑 —— 打有核国家的宣战赔率(自己也有核 / 自己没核);核心州(离国都 NUKE_CORE 个标准路程以内)要失守时动用核武器的机会 */
+  // 第二十四轮:有核国家之间几乎不直接开战(原来 0.3);用核只在亡国关头:国都那州要失守时 NUKE_USE_CAP,别的核心州 NUKE_USE(原来 0.12)
+  const NUKE_MAD = 0.03;
+  const NUKE_DETER = 0.1;
+  const NUKE_CORE = 2;
+  const NUKE_USE = 0.03;
+  const NUKE_USE_NEAR = 0.15;
+  const NUKE_USE_CAP = 0.7;
+  /** 第二十四轮:核禁忌 —— 世上动用过核武器以后这么多年里,谁都更不敢用(用核的机会 × TABOO) */
+  const TABOO_YEARS = 100;
+  const TABOO = 0.15;
+  /** 第二十四轮:军控 —— 一次核交换以后签约,核武库削减一半,ARMS_YEARS 年以后才慢慢不算 */
+  const ARMS_YEARS = 120;
+  /** 第二十四轮:命中这么多发以上的核交换带来核冬天,持续 WINTER_BASE + 每 WINTER_PER 发多一年(至多 WINTER_MAX) */
+  const WINTER_HITS = 60;
+  const WINTER_BASE = 3;
+  const WINTER_PER = 150;
+  const WINTER_MAX = 10;
+  /** 本地分支 modern-pace 第二十轮:挨了核打击的一方有洲际导弹时报复的机会 */
+  const RETALIATE = 0.85;
+  /** 第二十五轮:逐级升级 —— 回应时升一级的机会;有限核反击几发;一次核交换最多来回几轮 */
+  const ESCALATE = 0.35;
+  const LIMITED = [4, 12];
+  const LADDER_MAX = 4;
+  /** 第二十五轮:受害国的盟国、集团里有洲际导弹的一起报复的机会(按打到第几级:战术 / 有限 / 军事目标 / 连城一起打) */
+  const ALLY_RETALIATE = [0.2, 0.45, 0.6, 0.8];
+  /** 第二十五轮:首先动用核武器的,这么多年里邻国打它的赔率 × PARIAH_ODDS(各国讨伐) */
+  const PARIAH_YEARS = 60;
+  const PARIAH_ODDS = 4;
+  /** 第二十六轮:地球联邦对没加入的国家宣战的赔率倍数 */
+  const FED_WAR = 1.3;
+  /** 第二十五轮(补):这么多年内还归自己的州算故土,不往上扔核弹(要的是收回来) */
+  const HOME_YEARS = 150;
+  /** q 的州 r 能不能挨 p 的核弹:不是 p 的民族住的、不是 p 的故土(HOME_YEARS 年内归过 p) */
+  const foreignTo = (p: number, r: number, t: number): boolean =>
+    culture[r] !== pm.polities[p].culture && !(wm.prev[r] === p && t - wm.since[r] < HOME_YEARS);
+  /** p 打 q 的战略核能打哪些州:q 的、对 p 来说是外国的、离 p 的国都不太近的 */
+  const strikeLands = (p: number, q: number, t: number): number[] => {
+    const reachP = reachOf(wm, p);
+    return pm.lands[q].filter((r) => foreignTo(p, r, t) && !(reachP[r] <= 1.5));
+  };
+  /** p 打 q 的战术核打哪一州:r(正要失守的那州)归 q 就打它,不然打挨着 r、归 q 的那州;都得对 p 来说是外国。没有 = -1 */
+  const tacticalOf = (p: number, q: number, r: number, t: number): number => {
+    if (r < 0) return -1;
+    if (owner[r] === q && foreignTo(p, r, t)) return r;
+    for (let e = reg.adjStart[r]; e < reg.adjStart[r + 1]; e++) {
+      const j = reg.adj[e];
+      if (owner[j] === q && reg.adjKind[e] !== AdjKind.SeaRoute && foreignTo(p, j, t)) return j;
+    }
+    return -1;
+  };
+  const nuclear = (p: number, t: number): boolean => { const n = pm.polities[p]?.nuke; return n !== undefined && n <= t; };
+  // ---- 本地分支 modern-pace 第二十轮:战略核 ----
+  /** 有洲际导弹:有核、国都进了信息时代、国都那州有运载火箭 */
+  const icbm = (p: number, t: number): boolean => nuclear(p, t) && capEra(p, t) >= 7 && inventedHere(sim, pm.settlements[capitalAt(pm.polities[p], t)]?.region ?? -1, '运载火箭');
+  /** 反导:国都那州有侦察卫星 / 卫星导航 = 有反导;有空间站或进了未来时代 = 有空天平台 */
+  const defenseOf = (p: number, t: number): { abm: boolean; space: boolean } => {
+    // 第六十六轮:轨道被碎片封锁的那些年,谁的卫星、天基反导都不管用
+    if (blockedAt(sim, t)) return { abm: false, space: false };
+    const cr = pm.settlements[capitalAt(pm.polities[p], t)]?.region ?? -1;
+    const abm = inventedHere(sim, cr, '侦察卫星') || inventedHere(sim, cr, '卫星导航');
+    return { abm, space: abm && (inventedHere(sim, cr, '空间站') || capEra(p, t) >= 8) };
+  };
+  /**
+   * 第六十六轮:开战时互打卫星(反卫星),可能引发凯斯勒连锁碎片、封锁近地轨道(orbit.ts);
+   * 建成的太空电梯缩短封锁(清理便宜),但可能被碎片打断
+   */
+  const asatDone = new Set<number>();
+  const asatAtWar = (w: War, t: number, nuke: boolean): void => {
+    if (asatDone.has(w.id) || blockedAt(sim, t)) return;
+    const dx = defenseOf(w.a, t),
+      dy = defenseOf(w.b, t);
+    if (!dx.abm || !dy.abm) return;
+    const both = dx.space && dy.space;
+    // 平时(宣战时)只有两个都有空间站的大国才可能动手
+    if (!nuke && (!both || pm.size[w.a] < ASAT_BIG || pm.size[w.b] < ASAT_BIG)) return;
+    if (warRand(wm, w, nuke ? 5 : 1, U_ORBIT) >= (nuke ? ASAT_NUKE_P : ASAT_P)) return;
+    asatDone.add(w.id);
+    const kills = Math.round(5 + 40 * warRand(wm, w, 2, U_ORBIT)) * (both ? 3 : 1);
+    sim.record('orbit', { a: w.a, b: w.b, war: w.id, region: -1, settlement: -1, n: 0, oob: [kills, nuke ? 1 : 0] });
+    if (warRand(wm, w, 3, U_ORBIT) >= (nuke ? (both ? CASCADE_NUKE_P_BOTH : CASCADE_NUKE_P) : CASCADE_P)) return;
+    const towers: { a: number; region: number; settlement: number }[] = [];
+    for (let i = 0; i < sim.annalCount; i++) {
+      const a = sim.annal(i);
+      if (a.kind === 'tower' && a.year + (a.n ?? 20) <= t) towers.push({ a: a.a, region: a.region, settlement: a.settlement });
+    }
+    const sev = 0.4 + 0.6 * warRand(wm, w, 4, U_ORBIT);
+    const years = Math.round((BLOCK_MIN + BLOCK_SPAN * sev) / (towers.length ? TOWER_CUT : 1));
+    sim.record('orbit', { a: w.a, b: w.b, war: w.id, region: -1, settlement: -1, n: 1, oob: [years, Math.round(sev * 1000), t + years] });
+    towers.forEach((tw, k) => {
+      if (warRand(wm, w, 16 + k, U_ORBIT) < SEVER_P) sim.record('orbit', { a: tw.a, b: -1, war: w.id, region: tw.region, settlement: tw.settlement, n: 2, oob: [t + years] });
+    });
+  };
+  /** 一枚核弹被拦下的机会:同一时代都有反导约 0.35;防守方每领先一档 +0.28,落后一档 −0.28;空天平台再 +0.3;夹在 0–0.97 */
+  const interceptP = (atk: number, dfd: number, t: number): number => {
+    const d = defenseOf(dfd, t);
+    if (!d.abm) return 0;
+    const gap = Math.floor(capEra(dfd, t)) - Math.floor(capEra(atk, t));
+    return Math.max(0, Math.min(0.97, 0.35 + 0.28 * gap + (d.space ? 0.3 : 0)));
+  };
+  /**
+   * 本地分支 modern-pace 第二十一轮:核武库(一个数,不在地图上摆设施)—— 首次核试验以后攒,ARSENAL_YEARS 年攒满;
+   * 满了多少看国都的时代(ARSENAL_CAP)× 国土规模(√(州数 ÷ 50),夹在 0.3–3)
+   */
+  const ARSENAL_CAP = [0, 0, 0, 0, 0, 50, 300, 2000, 6000];
+  const ARSENAL_YEARS = 60;
+  const sizeF = (p: number) => Math.max(0.3, Math.min(3, Math.sqrt(pm.size[p] / 50)));
+  const arsenalOf = (p: number, t: number): number => {
+    const n0 = pm.polities[p]?.nuke;
+    if (n0 === undefined || n0 > t) return 0;
+    let cap = ARSENAL_CAP[Math.min(8, Math.floor(capEra(p, t)))] * sizeF(p);
+    // 第二十四轮:军控条约以后削减一半(签了几次减几次;ARMS_YEARS 年以后不算)
+    for (const c of wm.armsCuts) if (c <= t && t - c < ARMS_YEARS) cap *= 0.5;
+    return Math.floor(cap * Math.min(1, (t - n0) / ARSENAL_YEARS));
+  };
+  /** 反导能拦几发(有反导 40、有空天平台再 +300,× 国土规模) */
+  const abmCapOf = (p: number, t: number): number => {
+    const d = defenseOf(p, t);
+    return d.abm ? Math.floor((40 + (d.space ? 300 : 0)) * sizeF(p)) : 0;
+  };
+  /** 一轮最多打几发(编年史一发一条,再多读不过来) */
+  const SALVO_MAX = 200;
+  /** 第二十四轮:这一次核交换一共打了几发、中了几发(icbmStrike 累加,用核那一段开头清零) */
+  const salvo = { fired: 0, hits: 0, by: new Map<number, [number, number]>() };
+  /**
+   * 战略核打击(一轮):atk 从核武库里拿出 frac 那么多(至多 SALVO_MAX),按顺序分给 dfd:
+   *   约六成打纵深的州(军事目标,wave 0)、约三成打前线和国都那州(wave 1)、其余打人口最多的城(wave 2;city = false 时也打前线);
+   *   dfd 的反导先拦(拦得住的发数 = 反导容量,每发按代差的成功率),超出的全部命中(饱和)。
+   *   打城的按当量折损那座城的人口(Settlement.sacks,cause = nuke);打州的伤亡只写进编年史(按那州的城乡人口在编年史里估)。
+   *   每发记一条史事 nuke(n = 2,oob = [当量 kt, 伤亡千人(只有打城时), 拦下 1/0, 目标类型 wave])。
+   *   返回打中了几发军事目标(用来削对方的报复能力)
+   */
+  const icbmStrike = (w: War, atk: number, dfd: number, t: number, k: number, count: number, city: boolean): number => {
+    const n = Math.min(SALVO_MAX, Math.max(0, Math.floor(count)));
+    if (n <= 0) return 0;
+    // 第二十五轮:不打自己民族住的州、不打故土(HOME_YEARS 年内归过自己)、不打离自己国都太近的;没有能打的就不打
+    const lands = strikeLands(atk, dfd, t);
+    if (!lands.length) return 0;
+    const capR = pm.settlements[capitalAt(pm.polities[dfd], t)]?.region ?? -1;
+    const front = lands.filter((r) => r === capR || nextToOwner(r, atk));
+    const deep = lands.filter((r) => !front.includes(r));
+    const cities = lands.map((r) => pm.cityOf[r]).filter((c) => c >= 0 && pm.settlements[c].ended === undefined)
+      .map((c) => ({ c, p: populationAt(pm.settlements[c], t) })).sort((u, v) => v.p - u.p || u.c - v.c);
+    const pi = interceptP(atk, dfd, t);
+    let tries = abmCapOf(dfd, t);
+    let military = 0;
+    for (let j = 0; j < n; j++) {
+      const u = (j + 0.5) / n;
+      const wave = u < 0.6 ? 0 : u < 0.9 || !city || !cities.length ? 1 : 2;
+      const pickFrom = wave === 0 ? (deep.length ? deep : lands) : front.length ? front : lands;
+      let region: number;
+      let settlement = -1;
+      if (wave === 2) {
+        const cc = cities[(j - Math.ceil(0.9 * n)) % cities.length];
+        settlement = cc.c;
+        region = pm.settlements[cc.c].region;
+      } else {
+        region = pickFrom[Math.floor(warRand(wm, w, k * 4096 + j, U_ICBM) * pickFrom.length)];
+        settlement = pm.cityOf[region];
+      }
+      const kt = Math.round((300 + 4700 * warRand(wm, w, k * 4096 + j, U_YIELD)) / 100) * 100;
+      let stopped = false;
+      if (tries > 0) {
+        tries--;
+        stopped = warRand(wm, w, k * 4096 + j, U_INTERCEPT) < pi;
+      }
+      let dead = 0;
+      if (!stopped && wave === 2 && settlement >= 0) {
+        const s = pm.settlements[settlement];
+        const loss = Math.min(0.85, 0.2 + 0.12 * Math.log10(kt / 100));
+        dead = Math.round(populationAt(s, t) * loss);
+        (s.sacks ??= []).push({ year: t, loss: Math.round(loss * 1000) / 1000, cause: 'nuke' });
+      }
+      if (!stopped && wave === 0) military++;
+      salvo.fired++;
+      if (!stopped) salvo.hits++;
+      const by = salvo.by.get(atk) ?? [0, 0];
+      by[0]++;
+      if (!stopped) by[1]++;
+      salvo.by.set(atk, by);
+      sim.record('nuke', { a: atk, b: dfd, region, settlement, war: w.id, n: 2, oob: [kt, dead, stopped ? 1 : 0, wave] });
+    }
+    return military;
+  };
+  /**
+   * 第二十四轮:动用核武器以后(w.b 先用的):记下核禁忌的年份;
+   * 打了战略核的 —— 先用的一方的盟国、集团与它断盟(众矢之的,unally cause = pariah);各有核国家签军控条约(nuke n = 3,
+   * 在没参战的最大有核国家的国都签;没有就在攻方国都),核武库削减一半;命中 WINTER_HITS 发以上的 —— 核冬天(nuke n = 4)
+   */
+  const afterNukes = (w: War, t: number): void => {
+    wm.lastNuke = t;
+    if (!salvo.fired) return;
+    for (const x of wm.dm?.pactsOf(w.b) ?? []) api.diplomacy.note!('unally', { a: w.b, b: x.a === w.b ? x.b : x.a, war: w.id, cause: 'pariah' });
+    let host = w.a;
+    for (let q = 0; q < pm.polities.length; q++) {
+      if (q === w.a || q === w.b || pm.polities[q].ended !== undefined || !nuclear(q, t)) continue;
+      if (host === w.a || pm.size[q] > pm.size[host]) host = q;
+    }
+    const hs = capitalAt(pm.polities[host], t);
+    sim.record('nuke', { a: host, b: -1, region: pm.settlements[hs]?.region ?? -1, settlement: hs, war: w.id, n: 3 });
+    wm.armsCuts.push(t);
+    if (salvo.hits >= WINTER_HITS) {
+      const years = Math.min(WINTER_MAX, WINTER_BASE + Math.floor(salvo.hits / WINTER_PER));
+      sim.record('nuke', { a: w.b, b: w.a, region: -1, settlement: -1, war: w.id, n: 4, oob: [years, salvo.hits] });
+      wm.winter = { from: t, until: t + years };
+      // 第六十四轮:核冬天的饥荒(nuclearWinter.ts):轻重按命中发数 × 随机;每座城折损、乡下同样掉,余波里不长回来;各国按饥荒占满国土算动荡
+      const sev = winterSeverity(salvo.hits, warRand(wm, w, 1, U_WINTER), warRand(wm, w, 2, U_WINTER));
+      const until = t + years + FAMINE_TAIL;
+      for (const s of pm.settlements) {
+        if (s.ended !== undefined || !(t >= s.founded)) continue;
+        const loss = famineLoss(sev, warRand(wm, w, 4096 + s.id, U_WINTER));
+        (s.sacks ??= []).push({ year: t, loss: Math.round(loss * 1000) / 1000, cause: 'winter', until });
+      }
+      sim.record('nuke', { a: w.b, b: w.a, region: -1, settlement: -1, war: w.id, n: 6, oob: [years, Math.round(sev * 1000), until] });
+      const um = unrestModelOf(sim);
+      if (um)
+        for (const P of pm.polities) {
+          if (P.ended !== undefined) continue;
+          let fl = um.famines.get(P.id);
+          if (!fl) um.famines.set(P.id, (fl = []));
+          fl.push({ year: t, n: WINTER_FAMINE_N });
+        }
+      // 政府瘫痪、国家散架:国土 WINTER_SHATTER_MIN 州以上的国家各掷一次,机会 = WINTER_SHATTER × sev^1.5(先把名单记下来,散出来的新国家不再掷)
+      const pc = WINTER_SHATTER * Math.pow(sev, 1.5);
+      const big = pm.polities.filter((P) => P.ended === undefined && pm.size[P.id] >= WINTER_SHATTER_MIN).map((P) => P.id);
+      for (const pid of big) {
+        const P = pm.polities[pid];
+        if (P.ended !== undefined || warRand(wm, w, 8192 + pid, U_WINTER) >= pc) continue;
+        api.politics.shatter?.(P, 8192 + pid, t);
+      }
+    }
+  };
+  /** 州 r 挨着 q 的国土(陆上或海峡) */
+  const nextToOwner = (r: number, q: number): boolean => {
+    for (let e = reg.adjStart[r]; e < reg.adjStart[r + 1]; e++) if (owner[reg.adj[e]] === q && reg.adjKind[e] !== AdjKind.SeaRoute) return true;
+    return false;
+  };
+  const SPACE_GAP = 2;
+  /** 太空强国打远处的落后国家,远征打折的路程最多算这么远(标准路程;卫星、运载、远程投送) */
+  const SPACE_REACH = 6;
+  const MODERN_NORM = [1, 1, 0.6, 0.4];
+  const NEWBORN_MODERN = 80;
+  const WAR_REACH = 1;
+
   /**
    * 出兵避冬:战争 w 的第 i 仗此刻要打州 r,r 正在冬天里 = 顺延到的时刻(那州开春后再隔几天,已取整);不用顺延 = t
    */
@@ -1077,7 +1439,8 @@ export function installWars(sim: CivSim, pm: PolityModel, world: World, wm: WarM
     if (!w || w.end !== undefined) return;
     // 出兵避冬:要打的那州正在冬天里,顿兵到那州开春再打(同一仗重新预约;记一条 winter,until = 开春再打的时刻,接着推时按它重建)
     const [r0] = pickTarget(w, i, w.a, w.b, t, false);
-    if (r0 >= 0) {
+    // 本地分支 modern-pace:攻方国都进了工业以后不再顿兵过冬(铁路、冬装、机械化)
+    if (r0 >= 0 && modernSteps(pm.polities[w.a], t) === 0) {
       const until = thawOf(w, i, r0, t);
       if (until > t) {
         sim.record('winter', { a: w.a, b: w.b, region: r0, war: w.id, until });
@@ -1091,29 +1454,127 @@ export function installWars(sim: CivSim, pm: PolityModel, world: World, wm: WarM
     /** 丢了国都的是守方(攻方打下的) */
     let defCapital = false;
     const [r, def] = pickTarget(w, i, w.a, w.b, t, false);
-    if (r >= 0 && warRand(wm, w, i, U_ATTACK) < chance(w.a, w.b, r, def, t, pow, w)) {
-      capitalFell = defCapital = take(w, w.a, w.b, r, t, true);
+    const p0 = r >= 0 ? chance(w.a, w.b, r, def, t, pow, w) : 0;
+    // 本地分支 modern-pace 第十六轮:守方有核、这州离它国都很近,有 NUKE_USE 的机会动用核武器:这一仗不克
+    // 第二十四轮:国都那州要失守 = 亡国关头,用核的机会大得多;世上近年用过核的(核禁忌)谁都不太敢
+    const capRb = pm.settlements[capitalAt(pm.polities[w.b], t)]?.region ?? -1;
+    const useP = (r === capRb ? NUKE_USE_CAP : r >= 0 && reachOf(wm, w.b)[r] <= 1 ? NUKE_USE_NEAR : NUKE_USE) * (t - wm.lastNuke < TABOO_YEARS ? TABOO : 1);
+    // 第二十五轮(补):对守方来说有能打的外国目标才会动用(全是自己民族、故土就不用)
+    const nuked =
+      r >= 0 &&
+      nuclear(w.b, t) &&
+      reachOf(wm, w.b)[r] <= NUKE_CORE &&
+      warRand(wm, w, i, U_NUKE) < useP &&
+      ((icbm(w.b, t) && strikeLands(w.b, w.a, t).length > 0) || tacticalOf(w.b, w.a, r, t) >= 0);
+    if (nuked && warRand(wm, w, i, U_ATTACK) < p0) {
+      salvo.fired = 0;
+      salvo.hits = 0;
+      salvo.by.clear();
+      // 第六十六轮:核交换开始时先互打预警、侦察卫星(orbit.ts);引发连锁碎片的话,随后的核打击就没有天基反导了
+      asatAtWar(w, t, true);
+      // 第二十五轮:逐级升级。四级:0 战术核(打对方前线集结的那州)、1 有限核反击(LIMITED 发,只打军事目标)、
+      // 2 打军事目标(核武库的三到六成)、3 连城一起打(六成)。守方先手:有洲际导弹的一半打战略(1 或 2 级),不然战术;
+      // 对方有 RETALIATE 的机会回应,同级或升一级(ESCALATE;没有洲际导弹的只能回战术);你来我往至多 LADDER_MAX 轮,打到城了就停
+      const culprit = w.b;
+      const victim = w.a;
+      let tac = 0;
+      /** 各国被打中的军事目标(削它的报复能力) */
+      const hitOn = new Map<number, number>();
+      const fire = (p: number, q: number, rung: number, k: number): void => {
+        if (rung === 0) {
+          // 战术核:打 q 的前线(见 tacticalOf);对 p 来说找不到外国的那一州就不打
+          const tg = tacticalOf(p, q, r, t);
+          if (tg < 0) return;
+          sim.record('nuke', { a: p, b: q, region: tg, settlement: pm.cityOf[tg], war: w.id, n: 1, oob: [Math.round(10 + 40 * warRand(wm, w, k, U_TAC))] });
+          tac++;
+          return;
+        }
+        const ars = arsenalOf(p, t);
+        const left = Math.max(0, 1 - (1.5 * (hitOn.get(p) ?? 0)) / Math.max(1, ars));
+        const n = rung === 1 ? Math.min(ars, LIMITED[0] + Math.floor((LIMITED[1] - LIMITED[0] + 1) * warRand(wm, w, k, U_YIELD))) : ars * left * (rung === 2 ? 0.3 + 0.3 * warRand(wm, w, k, U_YIELD) : 0.6);
+        const m = icbmStrike(w, p, q, t, k, n, rung === 3);
+        hitOn.set(q, (hitOn.get(q) ?? 0) + m);
+      };
+      const canStrategic = icbm(culprit, t) && strikeLands(culprit, victim, t).length > 0;
+      let rung = canStrategic && (warRand(wm, w, i, U_ICBM) < 0.5 || tacticalOf(culprit, victim, r, t) < 0) ? (warRand(wm, w, i, U_ESC) < 0.5 ? 1 : 2) : 0;
+      let top = rung;
+      fire(culprit, victim, rung, i * 16);
+      let side = culprit;
+      let other = victim;
+      for (let step = 1; step <= LADDER_MAX; step++) {
+        if (!nuclear(other, t) || warRand(wm, w, i * 16 + step, U_RETALIATE) >= RETALIATE) break;
+        let next = Math.min(3, rung + (warRand(wm, w, i * 16 + step, U_ESC) < ESCALATE ? 1 : 0));
+        if (next >= 1 && !(icbm(other, t) && strikeLands(other, side, t).length > 0)) next = 0;
+        if (next === 0 && tacticalOf(other, side, r, t) < 0) break;
+        // 战术核你来我往一回就停(没升级)
+        if (next === 0 && rung === 0 && step >= 2) break;
+        fire(other, side, next, i * 16 + step);
+        rung = next;
+        top = Math.max(top, rung);
+        [side, other] = [other, side];
+        if (rung === 3 && step >= 2) break;
+      }
+      // 第二十五轮:受害国的集团、盟国里有洲际导弹的(和先用核的一方没有盟约的)一起报复
+      const dmm = wm.dm;
+      const allies: number[] = [];
+      if (dmm) {
+        const set = new Set<number>();
+        const L = dmm.blocOf(victim);
+        if (L >= 0) {
+          set.add(L);
+          for (const z of dmm.blocMembers(L)) set.add(z);
+        }
+        for (const x of dmm.pactsOf(victim)) set.add(x.a === victim ? x.b : x.a);
+        set.delete(victim);
+        set.delete(culprit);
+        for (const z of [...set].sort((a, b) => a - b)) {
+          if (!icbm(z, t) || dmm.pactOf(z, culprit) || (dmm.blocOf(z) >= 0 && dmm.blocOf(z) === dmm.blocOf(culprit))) continue;
+          if (warRand(wm, w, i * 64 + z, U_ALLYNUKE) >= ALLY_RETALIATE[top]) continue;
+          const ars = arsenalOf(z, t);
+          const n = top >= 3 ? ars * 0.4 : top === 2 ? ars * 0.2 : Math.min(ars, 3 + Math.floor(6 * warRand(wm, w, i * 64 + z, U_YIELD)));
+          if (n < 1) continue;
+          icbmStrike(w, z, culprit, t, i * 16 + 8 + allies.length, n, top >= 3);
+          allies.push(z);
+        }
+      }
+      wm.lastNuke = t;
+      wm.pariah.set(culprit, t);
+      // 第二十五轮:这一次核交换的总述(nuke n = 5;ps = [先用核的, 受害国, 参与报复的盟国……];oob = [先用核的打了几发、中了几发,
+      // 受害国打了几发、中了几发,盟国一共打了几发、中了几发,战术核几发,打到第几级])
+      const sum = (ps: number[]) => ps.reduce((a, p) => [a[0] + (salvo.by.get(p)?.[0] ?? 0), a[1] + (salvo.by.get(p)?.[1] ?? 0)], [0, 0]);
+      const [fa, ha] = sum([culprit]);
+      const [fb, hb] = sum([victim]);
+      const [fc, hc] = sum(allies);
+      sim.record('nuke', { a: culprit, b: victim, region: r, settlement: -1, war: w.id, n: 5, ps: [culprit, victim, ...allies], oob: [fa, ha, fb, hb, fc, hc, tac, top] });
+      afterNukes(w, t);
+      // 动用了核武器,双方当即停战(核战打不下去)
+      makePeace(w, t);
+      return;
+    } else if (r >= 0 && warRand(wm, w, i, U_ATTACK) < p0) {
+      capitalFell = defCapital = take(w, w.a, w.b, r, t, true, oobOf(w.a, w.b, r, def, t, p0));
       // 乘胜连下几州(打下国都、一方亡国就停)。追兵只能从关隘打进下一州、或者守方败兵从刚丢的那州只能经关隘退回:
       // 守方可能据险断后,追到这里为止
       let lost = r;
       for (let j = 1; j <= BREAK_MAX && !capitalFell && w.end === undefined; j++) {
         const [q, qdef] = pickTarget(w, i * 8 + j, w.a, w.b, t, false);
-        if (q < 0 || warRand(wm, w, i * 8 + j, U_BREAK) >= BREAK * chance(w.a, w.b, q, qdef, t, pow, w)) break;
+        const pq = q < 0 ? 0 : chance(w.a, w.b, q, qdef, t, pow, w);
+        if (q < 0 || warRand(wm, w, i * 8 + j, U_BREAK) >= BREAK * pq) break;
         if (holdPass(w, w.b, w.a, q, lost, i * 8 + j, t)) break;
-        capitalFell = defCapital = take(w, w.a, w.b, q, t, true);
+        capitalFell = defCapital = take(w, w.a, w.b, q, t, true, oobOf(w.a, w.b, q, qdef, t, pq));
         lost = q;
       }
     } else {
       // 没打下来:记一条战役(不改归属;编年史写成"某某之战")
-      if (r >= 0) sim.record('battle', { a: w.a, b: w.b, region: r, settlement: pm.cityOf[r], war: w.id, via: DEFENSE.indexOf(def) });
+      if (r >= 0) sim.record('battle', { a: w.a, b: w.b, region: r, settlement: pm.cityOf[r], war: w.id, via: DEFENSE.indexOf(def), oob: oobOf(w.a, w.b, r, def, t, p0) });
       if (warRand(wm, w, i, U_COUNTER) < COUNTER) {
         // 守方反攻:夺回被攻方占去的州。守方只能从关隘打进那州、或者攻方是经关隘打过来的(败兵只能经关隘退回):
         // 败退的攻方可能据险断后,夺不回
         const [q, qdef] = pickTarget(w, i, w.b, w.a, t, !api.war.revolt?.(w));
         if (q >= 0) {
-          if (warRand(wm, w, i, U_RETAKE) < chance(w.b, w.a, q, qdef, t, pow, w)) {
-            if (!holdPass(w, w.a, w.b, q, r, i * 8, t)) capitalFell = take(w, w.b, w.a, q, t, true);
-          } else sim.record('battle', { a: w.b, b: w.a, region: q, settlement: pm.cityOf[q], war: w.id, via: DEFENSE.indexOf(qdef) });
+          const pr = chance(w.b, w.a, q, qdef, t, pow, w);
+          if (warRand(wm, w, i, U_RETAKE) < pr) {
+            if (!holdPass(w, w.a, w.b, q, r, i * 8, t)) capitalFell = take(w, w.b, w.a, q, t, true, oobOf(w.b, w.a, q, qdef, t, pr));
+          } else sim.record('battle', { a: w.b, b: w.a, region: q, settlement: pm.cityOf[q], war: w.id, via: DEFENSE.indexOf(qdef), oob: oobOf(w.b, w.a, q, qdef, t, pr) });
         }
       }
     }
@@ -1177,6 +1638,13 @@ export function resumeWars(sim: CivSim, world: World, civ: Civ): void {
   /** 议和后替输的一方(复仇)、大胜的一方(连续吞并)多看一眼邻国:[战争, 哪一国, 议和的年份, 是连续吞并],按议和时预约的先后 */
   const looks: [War, number, Year, boolean][] = [];
   for (const e of civ.annals) {
+    // 本地分支 modern-pace 第二十四轮:核禁忌、军控、核冬天;第二十五轮:众矢之的(每一次核交换的第一条)
+    if (e.kind === 'nuke') {
+      if ((e.n === 1 || e.n === 2) && wm.lastNuke !== e.year) wm.pariah.set(e.a, e.year);
+      if (e.n === 1 || e.n === 2) wm.lastNuke = e.year;
+      else if (e.n === 3) wm.armsCuts.push(e.year);
+      else if (e.n === 4) wm.winter = { from: e.year, until: e.year + (e.oob?.[0] ?? 3) };
+    }
     if (e.kind === 'war') {
       wm.wars[e.war] = { id: e.war, a: e.a, b: e.b, start: e.year, takes: [] };
       if (e.cause === 'quell' || e.cause === 'heir' || e.cause === 'trek') civil.add(e.war);

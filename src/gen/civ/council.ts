@@ -66,7 +66,7 @@
 import { AdjKind, Layer, type Civ, type Polity, type Year } from './types';
 import { flog, keyed4, subSeed } from './engine/rand';
 import { type CivSim } from './engine/sim';
-import { polityModelOf, rulingLeanings, type PolityModel } from './polities';
+import { polityModelOf, rulingLeanings, type PolityModel, modernSteps } from './polities';
 import { politicsModelOf, type PoliticsModel } from './politics';
 import { warModelOf, type WarModel } from './wars';
 import { capitalAt, populationAt } from './growth';
@@ -704,7 +704,9 @@ function check(sim: CivSim, pm: PolityModel, pol: PoliticsModel, wm: WarModel, c
   }
 
   // ⑩ 改土归流
-  if (fief && ready(Issue.Unfief) && t - r.fief! >= UNFIEF_AGE && a >= AF_UNFIEF && u < UNFIEF_U && purse >= PURSE_UNFIEF) {
+  // 本地分支 modern-pace 第二十八轮:国都进了电气时代还分封着边地的,下一次议事就废封(废藩置县),不看那几道门槛
+  const modernNow = modernSteps(pm.polities[p], t) >= 2;
+  if (fief && ready(Issue.Unfief) && (modernNow || (t - r.fief! >= UNFIEF_AGE && a >= AF_UNFIEF && u < UNFIEF_U && purse >= PURSE_UNFIEF))) {
     // 最大的那片边地(有城、管得最松)
     let foe = -1;
     let c0 = Infinity;
@@ -718,7 +720,7 @@ function check(sim: CivSim, pm: PolityModel, pol: PoliticsModel, wm: WarModel, c
     }
     // 火药以后(分封渐废)改土归流更容易
     const x = UNFIEF_0 + UNFIEF_ADMIN * a - UNFIEF_U_W * u + UNFIEF_DEV * keen + (has(Practice.FiefLess) ? FIEF_LESS_EASE : 0) + jit(Issue.Unfief);
-    let out = x > UNFIEF_DONE ? Outcome.Done : x > UNFIEF_SHELVE ? Outcome.Shelve : Outcome.Break;
+    let out = modernNow || x > UNFIEF_DONE ? Outcome.Done : x > UNFIEF_SHELVE ? Outcome.Shelve : Outcome.Break;
     if (out === Outcome.Break && !canRise(wm, cm, p, foe, t)) out = Outcome.Shelve;
     record(Issue.Unfief, out, foe >= 0 ? foe : capR);
     if (out === Outcome.Break) cm.raise(p, foe, t);

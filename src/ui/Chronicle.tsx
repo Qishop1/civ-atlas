@@ -16,7 +16,8 @@
  * - "复制全文":当前列出的纪事(含战争里的每一件事)复制成纯文本,给 OC 作者写设定用。
  * - "写成史书"(阶段 5):打开 HistoryBook 窗口;按国家看时默认写这一国的国史。「使用 AI 功能」关着时没有这个按钮。
  */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
+import { nuclearWarAt, nuclearWarsOf } from '../gen/civ/story/nuclearWar';
 import type { Civ } from '../gen/civ/types';
 import { chronicleText, filterChronicle, polityChronicle, type ChronicleEntry } from '../gen/civ/story/chronicle';
 import { monthLabel, monthOf, yearFull, yearShort } from '../gen/era';
@@ -59,7 +60,18 @@ export function Chronicle({ civ }: { civ: Civ | null }) {
     return polityChronicle(civ, all, view.polity);
   }, [civ, all, view.polity]);
   const majors = useMemo(() => filterChronicle(mine, { major: true }), [mine]);
-  const list = view.major ? majors : mine;
+  // 本地分支 modern-pace 第二十一轮:核大战模式 —— 时间轴停在核大战时段里时自动只列核的条目(和那段里的战争、议和);能手动开关
+  const nukeWars = useMemo(() => (civ ? nuclearWarsOf(civ) : []), [civ]);
+  const tlYear = useSyncExternalStore(subscribeCivTime, () => getCivTime().year);
+  const atWar = nukeWars.length ? nuclearWarAt(nukeWars, tlYear ?? civ?.endYear ?? 0) : null;
+  const [nukeManual, setNukeManual] = useState<'auto' | 'on' | 'off'>('auto');
+  const [dismissed, setDismissed] = useState<number | null>(null);
+  const nukeOn = nukeManual === 'on' || (nukeManual === 'auto' && !!atWar && dismissed !== atWar.from);
+  const nukes = useMemo(
+    () => mine.filter((e) => e.tag === '核' || ((e.tag === '战' || e.tag === '和') && nukeWars.some((w) => e.year >= w.from - 1 && e.year <= w.to + 1))),
+    [mine, nukeWars],
+  );
+  const list = nukeOn ? nukes : view.major ? majors : mine;
   /** 列出来的顺序:新的在上(战争里的每一件事仍按先后) */
   const shown = useMemo(() => [...list].reverse(), [list]);
   const [expanded, setExpanded] = useState<ReadonlySet<number>>(() => new Set());
@@ -198,12 +210,17 @@ export function Chronicle({ civ }: { civ: Civ | null }) {
     <section className={`chronicle${era ? ' era' : ''}${months ? ' mo' : ''}`}>
       <div className="chron-filters">
         <div className="seg">
-          <button className={view.major ? 'on' : ''} onClick={() => setChronicle({ major: true })} title={`大国立国、称王称帝、改变格局的战争、分裂、复国、合并……`}>
+          <button className={!nukeOn && view.major ? 'on' : ''} onClick={() => { setNukeManual('off'); setChronicle({ major: true }); }} title={`大国立国、称王称帝、改变格局的战争、分裂、复国、合并……`}>
             大事 <span className="chron-n">{majors.length}</span>
           </button>
-          <button className={view.major ? '' : 'on'} onClick={() => setChronicle({ major: false })} title="所有纪事(含小国、小仗、部落)">
+          <button className={!nukeOn && !view.major ? 'on' : ''} onClick={() => { setNukeManual('off'); setChronicle({ major: false }); }} title="所有纪事(含小国、小仗、部落)">
             全部 <span className="chron-n">{mine.length}</span>
           </button>
+          {nukes.length > 0 && (
+            <button className={nukeOn ? 'on' : ''} onClick={() => setNukeManual(nukeOn ? 'off' : 'on')} title="只看核试验、核打击、拦截(核大战时自动切到这里)">
+              核战 <span className="chron-n">{nukes.length}</span>
+            </button>
+          )}
         </div>
         {choices.length > 0 && (
           <label className={`chron-pick${focus ? ' on' : ''}`}>
@@ -244,6 +261,12 @@ export function Chronicle({ civ }: { civ: Civ | null }) {
           )}
         </span>
       </div>
+      {nukeOn && atWar && (
+        <div className="chron-nuke" role="status">
+          核大战 · 第 {Math.floor(atWar.from)} 年起 · 已发射 {atWar.shots} 枚,命中 {atWar.hits} 枚
+          <button className="ov-btn" onClick={() => { setDismissed(atWar.from); setNukeManual('auto'); }}>退出</button>
+        </div>
+      )}
       <div className="chron-list" ref={listRef}>
         {shown.map((e) => (
           <div key={e.id} className="chron-item">

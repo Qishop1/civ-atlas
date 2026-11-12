@@ -23,6 +23,7 @@
  * **快照**:每 RURAL_SNAP 年存一份按州的进 Civ.development.rural(界面上州、国家的人口按前后两份线性插值,growth.ts 的 ruralPopulationAt)。
  * 随机数:不用。纯计算,不碰 DOM。
  */
+import { winterIn } from './nuclearWinter';
 import type { Year } from './types';
 import { MAJOR_RIVER } from './habitat';
 import { biomeColumn } from '../biomes';
@@ -278,6 +279,9 @@ export function popLayer(sim: CivSim, pm: PolityModel, dev: DevModel, eng: Table
     const blight = eng.input('新荒').fill(0);
     // 全球大疫(pandemic.ts):上一步以来各州凋敝占了几成(没有全球大疫的世界全是 0)
     const slump = eng.input('凋敝').fill(0);
+    // 第六十四轮:核冬天余波里各州乡下都不往回长(全球减产)
+    const wv = winterIn(sim, t - POP_EVERY, t);
+    if (wv) slump.fill(SLUMP_HOLD * Math.min(1, wv.years / POP_EVERY));
     const pan = pandemicModelOf(sim);
     if (pan?.list.length) {
       for (let r = 0; r < R; r++) {
@@ -304,8 +308,8 @@ export function popLayer(sim: CivSim, pm: PolityModel, dev: DevModel, eng: Table
           if (r >= R) continue;
           cut(r, ruralShare(k.cause) * k.loss);
           // 瘟疫、疫后凋敝、地震水旱不算兵灾(不逃);饥荒、大水、大旱伤地力
-          if (k.cause !== 'plague' && k.cause !== 'quake' && k.cause !== 'slump') hit[r]++;
-          if (k.cause === 'famine' || (k.cause === 'quake' && quakeWord(reg, k.from ?? r) !== '地震')) blight[r]++;
+          if (k.cause !== 'plague' && k.cause !== 'quake' && k.cause !== 'slump' && k.cause !== 'winter') hit[r]++;
+          if (k.cause === 'famine' || k.cause === 'winter' || (k.cause === 'quake' && quakeWord(reg, k.from ?? r) !== '地震')) blight[r]++;
         }
       }
       if (!ended[i] && s.ended !== undefined && s.ended < t) {

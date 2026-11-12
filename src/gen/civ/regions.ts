@@ -672,6 +672,9 @@ function finishRegions(
     landmass,
     adjBorder,
     adjCoast,
+    // 本地分支 modern-pace 第二十七轮:治所的纬度(编年史里太空电梯选址等用;等距圆柱的 y 换算)
+    lat: Float32Array.from(seat, (c) => (c >= 0 && c < world.mesh.n ? 90 - (world.mesh.y[c] / world.height) * 180 : 0)),
+    lon: Float32Array.from(seat, (c) => (c >= 0 && c < world.mesh.n ? (world.mesh.x[c] / world.width) * 360 - 180 : 0)),
   };
 }
 

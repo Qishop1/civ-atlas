@@ -642,6 +642,8 @@ function ivText(civ: Civ, v: Intervention): string {
       return `${folk(v.folk)} 分出一支大迁徙${v.region ? `,从 ${reg(v.region)} 出发` : ''}${v.to ? `,往 ${reg(v.to)}` : ''}`;
     case 'stay':
       return `${folk(v.folk)} 不许大迁徙${until(v.until)}`;
+    case 'moonsite':
+      return `指定月面着陆点(经度 ${v.lon}°、纬度 ${v.lat}°)`;
     case 'appoint':
       return `${id(v.a, 'polity', 'P')} 任作者的人物为${v.role === 'general' ? '将领' : '名臣'}${until(v.until)}`;
   }
@@ -1472,6 +1474,7 @@ const KIND_LABEL: Record<Intervention['kind'], string> = {
   boost: '推一把发展',
   trek: '大迁徙',
   stay: '不许迁',
+  moonsite: '月面着陆点',
   appoint: '任作者的人物为将 / 为臣',
 };
 

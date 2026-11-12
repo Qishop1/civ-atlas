@@ -58,6 +58,7 @@
  * **不存内存状态**:饥荒、民变、崩解都由史事重建(resumeUnrest);看年景、春荒的时刻由"第几次"(春荒再加半球)算出来。
  * 随机数:keyed(subSeed(seed, 'civ-unrest'), 国家 / 州…, 第几次, 用途),和处理顺序无关。纯计算,不碰 DOM。
  */
+import { WINTER_FAMINE_N, WINTER_U, winterIn } from './nuclearWinter';
 import type { World } from '../world';
 import { COLDEST_NORTH, yearClimate } from '../seasons';
 import { AdjKind, Layer, type Civ, type Polity, type Year } from './types';
@@ -67,7 +68,7 @@ import { BOOKED_AT_START, bookChain, quantize, type CivSim } from './engine/sim'
 import { polityModelOf, type PolityModel } from './polities';
 import { warModelOf, type War, type WarModel } from './wars';
 import { politicsModelOf, type PoliticsModel } from './politics';
-import { devModelOf } from './development';
+import { devModelOf, eraNowAt } from './development';
 import { GROWTH_A, capitalAt, populationAt } from './growth';
 import { calamityRates, type Calamity } from './calamity';
 import type { UnrestRuleConsts } from './stateTables';
@@ -276,6 +277,11 @@ export function unrestInputs(um: UnrestModel, P: Polity, t: Year): { age: number
 // 挂到推演引擎上
 
 /** 登记动荡、饥荒、民变、大崩解的事件处理和挂钩(installDevelopment 之后调用),预约第一次看年景 */
+/** 本地分支 modern-pace:各时代闹饥荒的赔率还剩几成(工业 0.5、电气 0.25、信息 0.12、未来 0.06) */
+const FAMINE_ERA_KEEP: readonly number[] = [1, 1, 1, 1, 1, 0.5, 0.25, 0.12, 0.06];
+/** 本地分支 modern-pace 第二十三轮:各时代闹了饥荒饿死的人还剩几成(工业 0.6、电气 0.3、信息 0.1、未来 0.05;赈济、运粮、医疗) */
+const FAMINE_LOSS_KEEP: readonly number[] = [1, 1, 1, 1, 1, 0.6, 0.3, 0.1, 0.05];
+
 export function installUnrest(sim: CivSim, pm: PolityModel, seed: number, world: World, calamity: Calamity | undefined): UnrestModel {
   const wm = warModelOf(sim);
   const pol = politicsModelOf(sim);
@@ -455,10 +461,17 @@ function hook(sim: CivSim, um: UnrestModel, world: World, calamity: Calamity | u
         if (rest) continue;
         const full = 1 / (1 + GROWTH_A * fexp(-s.growth * (t - s.founded)));
         const f2 = full * full;
-        const odds = sev * (1 - HOP_FADE * hop[r]) * CLIMATE[reg.biome[r]] * (P_BASE + P_FULL * f2 * f2) * (soil ? 1 + SOIL_W * (1 - soil[r]) : 1);
+        // 本地分支 modern-pace:工业以后运输、储备、农技让灾年少饿死人,按州此刻的时代打折
+        const er = eraNowAt(sim, r);
+        const ek = er < 5 ? 1 : FAMINE_ERA_KEEP[Math.min(FAMINE_ERA_KEEP.length - 1, Math.floor(er))];
+        // 本地分支 modern-pace 第二十四轮:核冬天里饥荒多几倍,时代的减免也大半不管用(烟尘蔽日,全球减产)
+        const wn = um.wm.winter;
+        const nw = !!wn && t >= wn.from && t < wn.until;
+        const odds = (nw ? Math.max(ek, 0.5) * 3 : ek) * sev * (1 - HOP_FADE * hop[r]) * CLIMATE[reg.biome[r]] * (P_BASE + P_FULL * f2 * f2) * (soil ? 1 + SOIL_W * (1 - soil[r]) : 1);
         const tag = reg.seat[r];
         if (keyed4(um.base, k, tag, c, U_HIT) >= odds) continue;
-        const loss = LOSS[0] + (LOSS[1] - LOSS[0]) * Math.min(1, 0.5 * odds + 0.5 * keyed4(um.base, k, tag, c, U_LOSS));
+        const lk = er < 5 ? 1 : nw ? 0.6 : FAMINE_LOSS_KEEP[Math.min(FAMINE_LOSS_KEEP.length - 1, Math.floor(er))];
+        const loss = lk * (LOSS[0] + (LOSS[1] - LOSS[0]) * Math.min(1, 0.5 * odds + 0.5 * keyed4(um.base, k, tag, c, U_LOSS)));
         (s.sacks ??= []).push({ year: t, loss: Math.round(loss * 1000) / 1000, cause: 'famine' });
         const p = owner[r];
         let list = hits.get(p);
@@ -489,7 +502,10 @@ function hook(sim: CivSim, um: UnrestModel, world: World, calamity: Calamity | u
     if (P.ended !== undefined || N < REVOLT_STATE || rebelNow(pid) || wm.iv?.unites(pid, t)) return false;
     // 这次的饥荒表里还没算进去(每年年初才算),先加上
     const u = api.politics.unrest!(P, t) + (api.politics.famineBump?.(P, list.length) ?? 0);
-    const odds = REVOLT_ODDS * fexp(REVOLT_K * (u - REVOLT_U0)) * Math.min(1, list.length / 3);
+    // 本地分支 modern-pace 第三十一轮:近现代国家有赈济和警察,饥民起事少得多;地球联邦再减半
+    const erR = eraNowAt(sim, pm.settlements[capitalAt(P, t)].region);
+    const keepR = erR < 5 ? 1 : [0.7, 0.4, 0.15, 0.08][Math.min(3, Math.floor(erR) - 5)];
+    const odds = REVOLT_ODDS * fexp(REVOLT_K * (u - REVOLT_U0)) * Math.min(1, list.length / 3) * keepR * (P.federation !== undefined ? 0.5 : 1);
     if (keyed(um.base, pm.ptag[pid], k, U_REVOLT) >= odds / (1 + odds)) return false;
     const capR = pm.settlements[capitalAt(P, t)].region;
     // 起事的州:灾最重的、不是国都、有城、不是永久划给它的州(阶段 4 干预)
@@ -573,9 +589,13 @@ function hook(sim: CivSim, um: UnrestModel, world: World, calamity: Calamity | u
     if (N < COLLAPSE_MIN || t - P.founded < COLLAPSE_AGE || t - (um.collapsed.get(pid) ?? -Infinity) < COLLAPSE_REST) return false;
     if (wm.iv?.unites(pid, t)) return false; // 阶段 4 干预"禁止分裂"
     const share = landShare(pid);
-    if (share < HEG_GATE) return false;
-    const u = api.politics.unrest!(P, t) + HEG_W * Math.min(1, Math.max(0, (share - HEG_0) / HEG_SPAN));
-    const odds = COLLAPSE_ODDS * fexp(COLLAPSE_K * (u - COLLAPSE_U0));
+    // 本地分支 modern-pace 第六十四轮:核冬天余波里(nuclearWinter.ts)不看是不是霸主、联邦也不打折,动荡按轻重往上加 —— 政府瘫痪、国家散架
+    const wv = winterIn(sim, t - 1, t);
+    if (share < HEG_GATE && !wv) return false;
+    // 本地分支 modern-pace 第三十一轮:地球联邦不按"疆域太大"加动荡,大崩解的机会只剩一成
+    const fed = P.federation !== undefined && !wv;
+    const u = api.politics.unrest!(P, t) + (fed ? 0 : HEG_W * Math.min(1, Math.max(0, (share - HEG_0) / HEG_SPAN))) + (wv ? WINTER_U * wv.sev : 0);
+    const odds = COLLAPSE_ODDS * fexp(COLLAPSE_K * (u - COLLAPSE_U0)) * (fed ? 0.1 : 1);
     if (keyed(um.base, pm.ptag[pid], k, U_COLLAPSE) >= odds / (1 + odds)) return false;
     return collapse(P, k, t);
   };
@@ -665,7 +685,8 @@ function hook(sim: CivSim, um: UnrestModel, world: World, calamity: Calamity | u
     const fl = um.famines.get(pid);
     let famine = 0;
     if (fl) for (let i = fl.length - 1; i >= 0 && t - fl[i].year < FAMINE_YEARS; i--) famine += fl[i].n;
-    const wT = (era < 2 ? 1.5 : era < 3 ? 0.4 : 0.1) + (P.kind === 'nomad' ? 1.2 : 0);
+    // 本地分支 modern-pace 第二十三轮:国都进了工业以后崩解不再散回部落(散出去的州照旧各自立国)
+    const wT = era >= 5 ? 0 : (era < 2 ? 1.5 : era < 3 ? 0.4 : 0.1) + (P.kind === 'nomad' ? 1.2 : 0);
     const wL = 0.6 + 2 * Math.min(1, famine / Math.max(FAMINE_FULL_MIN, FAMINE_FULL * N)) + (wm.active.some((w) => w.a === pid || w.b === pid) ? 0.4 : 0);
     const wC = 1.2;
     const x = keyed(um.base, tag, k, U_KIND) * (wT + wL + wC);
@@ -718,6 +739,14 @@ export function resumeUnrest(sim: CivSim, world: World, civ: Civ): void {
       let fl = um.famines.get(e.a);
       if (!fl) um.famines.set(e.a, (fl = []));
       fl.push({ year: e.year, n: e.b });
+    } else if (e.kind === 'nuke' && e.n === 6) {
+      // 第六十四轮:核冬天的饥荒 —— 那一刻还在的国家都算饥荒占满国土(和 wars.ts 结算时一样)
+      for (const P of civ.polities) {
+        if (!(P.founded <= e.year) || (P.ended !== undefined && P.ended <= e.year)) continue;
+        let fl = um.famines.get(P.id);
+        if (!fl) um.famines.set(P.id, (fl = []));
+        fl.push({ year: e.year, n: WINTER_FAMINE_N });
+      }
     } else if (e.kind === 'plague' && e.a >= 0) {
       let pl = um.plagues.get(e.a);
       if (!pl) um.plagues.set(e.a, (pl = []));

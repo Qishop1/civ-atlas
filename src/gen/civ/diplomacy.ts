@@ -43,11 +43,13 @@
  *
  * 随机数:keyed(subSeed(seed, 'civ-diplomacy'), 国家…, 第几次, 用途);国家一律用位置锚(PolityModel.ptag)。纯计算,不碰 DOM。
  */
+import { eraNowAt } from './development';
 import type { World } from '../world';
 import { YEAR_TICKS, resolveKey } from '../edits';
 import { Layer, type Annal, type Civ, type Year } from './types';
 import { fpow, keyed, keyed4, subSeed } from './engine/rand';
 import { bookChain, quantize, type CivSim } from './engine/sim';
+import { modernSteps } from './polities';
 import { befriends, canCross, effOf, endPolity, hates, picks, policyAt, polityModelOf, powerScaleOf, type PolityModel } from './polities';
 import { POLICY_KNOBS } from './policy';
 import { MARRIAGES_KNOBS } from './marriages';
@@ -155,6 +157,15 @@ const U_LAPSE = 4;
 const U_SUBMIT = 5;
 const U_PACT = 6;
 const U_JOIN = 7;
+/** 本地分支 modern-pace 第二十六轮:各国加入地球联邦 */
+const U_FED = 9301;
+/** 本地分支 modern-pace:军事集团的随机数用途 */
+const U_BLOC = 9101;
+const U_BLOC_JOIN = 9102;
+/** 本地分支 modern-pace:盟主国力至少是入盟国的几倍;入盟的机会;集体防御参战的机会 */
+const BLOC_POWER = 1.5;
+const BLOC_ODDS = 0.5;
+const BLOC_JOIN = 0.85;
 const U_RESCUE = 8;
 const U_PUNISH = 9;
 const U_SUE = 10;
@@ -169,6 +180,8 @@ export type DiplomacyKnobs = typeof DIPLOMACY_KNOBS.values;
 export interface Pact {
   a: number;
   b: number;
+  /** 本地分支 modern-pace:军事集团的盟约(a = 成员,b = 盟主) */
+  bloc?: boolean;
   /** 结盟的年份 */
   since: Year;
   /** 共御的强邻(−1 = 没有) */
@@ -254,7 +267,22 @@ export class DiplomacyModel {
 
   /** 两国此刻不会互相宣战:结着盟、有宗藩之分、同是一国的藩属、在同一份约里(treaties.ts) */
   friendly(p: number, q: number): boolean {
-    return !!this.pactOf(p, q) || this.vassalTie(p, q) || !!this.api.bound?.(p, q);
+    return !!this.pactOf(p, q) || this.vassalTie(p, q) || !!this.api.bound?.(p, q) || (this.blocOf(p) >= 0 && this.blocOf(p) === this.blocOf(q));
+  }
+
+  /** 本地分支 modern-pace:p 在哪个军事集团里(盟主的国家编号;盟主自己 = 自己;不在 = −1) */
+  blocOf(p: number): number {
+    for (const x of this.pacts) {
+      if (!x.bloc || !this.alive(x.a) || !this.alive(x.b)) continue;
+      if (x.a === p) return x.b;
+      if (x.b === p) return p;
+    }
+    return -1;
+  }
+
+  /** 本地分支 modern-pace:盟主 L 的集团成员(不含盟主) */
+  blocMembers(L: number): number[] {
+    return this.pacts.filter((x) => x.bloc && x.b === L && this.alive(x.a) && this.alive(x.b)).map((x) => x.a);
   }
 
   /**
@@ -263,6 +291,7 @@ export class DiplomacyModel {
    */
   betrayable(x: Pact, p: number, t: Year, power: (q: number) => number): boolean {
     const { BETRAY_AGE, BETRAY_PREY } = this.k;
+    if (x.bloc) return false; // 本地分支 modern-pace:集团成员不背盟
     if (t - x.since < BETRAY_AGE) return false;
     const q = x.a === p ? x.b : x.a;
     return !this.alive(x.foe) || power(x.foe) < power(p) || power(p) >= BETRAY_PREY * power(q);
@@ -277,7 +306,7 @@ export class DiplomacyModel {
 
   /** 按一条史事更新(推演里记完史事就调;接着推时按史事重放) */
   apply(e: Annal): void {
-    if (e.kind === 'alliance') this.pacts.push({ a: e.a, b: e.b, since: e.year, foe: e.foe ?? -1 });
+    if (e.kind === 'alliance') this.pacts.push({ a: e.a, b: e.b, since: e.year, foe: e.foe ?? -1, ...(e.cause === 'bloc' ? { bloc: true } : {}) });
     else if (e.kind === 'unally') {
       const x = this.pacts.find((v) => (v.a === e.a && v.b === e.b) || (v.a === e.b && v.b === e.a));
       if (x) this.drop(x, e.year);
@@ -333,7 +362,7 @@ export function installDiplomacy(sim: CivSim, pm: PolityModel, dm: DiplomacyMode
 
   const record = (kind: Annal['kind'], f: Partial<Omit<Annal, 'year' | 'kind'>>) => {
     sim.record(kind, f);
-    dm.apply({ year: sim.now, kind, a: f.a ?? -1, b: f.b ?? -1, region: -1, settlement: -1, war: f.war ?? -1, ...(f.foe !== undefined ? { foe: f.foe } : {}) });
+    dm.apply({ year: sim.now, kind, a: f.a ?? -1, b: f.b ?? -1, region: -1, settlement: -1, war: f.war ?? -1, ...(f.foe !== undefined ? { foe: f.foe } : {}), ...(f.cause === 'bloc' ? { cause: f.cause } : {}) });
   };
   api.diplomacy.note = record;
 
@@ -452,8 +481,74 @@ export function installDiplomacy(sim: CivSim, pm: PolityModel, dm: DiplomacyMode
     return true;
   };
 
+  // ---- 本地分支 modern-pace 第二十六轮:地球联邦 ----
+  /** 进了未来时代(国都那州);集团 + 保护国合计占天下有主之州几成以上才签宪章;各国看邦交时加入的机会;信息时代以后才肯加入 */
+  const FED_ERA = 8;
+  const FED_SHARE = 0.4;
+  const FED_JOIN = 0.2;
+  const FED_JOIN_ERA = 7;
+  const fedOf = (): number => {
+    for (const P of pm.polities) if (P.federation !== undefined && P.ended === undefined) return P.id;
+    return -1;
+  };
+  const eraOf = (p: number) => eraNowAt(sim, capRegion(p, sim.now));
+  /** v 的国土整个并进 F(和纳土归附一样),记 merge(cause = federation) */
+  const fold = (F: number, v: number, t: number) => {
+    for (const r of pm.lands[v].slice()) sim.setOwner(Layer.Polity, r, F, Ev.Merge);
+    endPolity(pm, v, t);
+    pol?.merged.add(v);
+    sim.record('merge', { a: F, b: v, cause: 'federation' });
+  };
+  /** 天下有主之州全归联邦了:记全球统一 */
+  const unified = (F: number, t: number) => {
+    for (const P of pm.polities) if (P.id !== F && P.ended === undefined && pm.size[P.id] > 0) return;
+    sim.record('federation', { a: F, b: -1, n: 2, region: capRegion(F, t), settlement: capitalAt(pm.polities[F], t) });
+  };
+  const tryFederate = (L: number, t: number): boolean => {
+    if (fedOf() >= 0 || eraOf(L) < FED_ERA || atWar(L) || halted(L, t)) return false;
+    // 集团盟主带上成员;不在集团里的大国自己带保护国
+    const bloc = dm.blocOf(L);
+    if (bloc >= 0 && bloc !== L) return false;
+    const group = new Set<number>([L, ...dm.blocMembers(L), ...dm.vassalsOf(L)]);
+    for (const m of [...group]) for (const v of dm.vassalsOf(m)) group.add(v);
+    let mine = 0;
+    let all = 0;
+    for (const P of pm.polities) {
+      if (P.ended !== undefined) continue;
+      all += pm.size[P.id];
+      if (group.has(P.id)) mine += pm.size[P.id];
+    }
+    if (!all || mine < FED_SHARE * all) return false;
+    pm.polities[L].federation = t;
+    const joined: number[] = [];
+    for (const v of [...group].sort((a, b) => a - b)) {
+      if (v === L || !alive(v) || atWar(v) || wm.iv?.protects(v, t) || wm.iv?.holdsLock(v, t)) continue;
+      fold(L, v, t);
+      joined.push(v);
+    }
+    sim.record('federation', { a: L, b: -1, n: 0, ps: [L, ...joined], region: capRegion(L, t), settlement: capitalAt(pm.polities[L], t) });
+    unified(L, t);
+    return true;
+  };
+  /** 联邦成立以后:挨着联邦、进了信息时代、没在打仗的,有机会自愿加入(同民族的更肯) */
+  const tryJoinFed = (v: number, k: number, t: number): boolean => {
+    const F = fedOf();
+    if (F < 0 || v === F || !alive(v) || atWar(v) || atWar(F) || eraOf(v) < FED_JOIN_ERA) return false;
+    if (wm.iv?.protects(v, t) || wm.iv?.holdsLock(v, t)) return false;
+    // 第三十一轮:联邦成立得越久越肯加入(每百年 +1 倍,封顶 0.8);成立百年以后隔海的也可能来(机会减半)
+    const age = t - (pm.polities[F].federation ?? t);
+    const near = borders(v, F);
+    if (!near && age < 100) return false;
+    const odds = Math.min(0.8, FED_JOIN * (1 + age / 100)) * (pm.polities[v].culture === pm.polities[F].culture ? 1.5 : 1) * (near ? 1 : 0.5);
+    if (keyed4(dm.base, pm.ptag[v], pm.ptag[F], k, U_FED) >= odds) return false;
+    fold(F, v, t);
+    unified(F, t);
+    return true;
+  };
+
   // ---- ③ 盟约渐废 ----
   const tryLapse = (x: Pact, p: number, k: number, t: number): boolean => {
+    if (x.bloc) return false; // 本地分支 modern-pace:集团的盟约不随强邻衰亡渐废
     if (t - x.since < LAPSE_AGE) return false;
     const f = x.foe;
     if (alive(f) && powerOf(f, t) >= LAPSE_RATIO * Math.max(powerOf(x.a, t), powerOf(x.b, t))) return false;
@@ -532,6 +627,51 @@ export function installDiplomacy(sim: CivSim, pm: PolityModel, dm: DiplomacyMode
     return true;
   };
 
+  // ---- 本地分支 modern-pace:军事集团 ----
+  /** 那一刻是不是共和(海洋共和一系,或改制改出来的共和那一段) */
+  const republicAt = (q: number, t: number): boolean => {
+    const Q = pm.polities[q];
+    if (Q.lineage === 'republic') return true;
+    let reg: string | undefined;
+    for (const d of Q.dynasties ?? []) if (d.year <= t) reg = d.regime;
+    return reg === 'republic';
+  };
+  /**
+   * 不是藩属、还没入集团的国家 p:受某国威胁(f)时,投靠一个国都进了电气以后的强国 L(国力是自己 BLOC_POWER 倍以上、
+   * 和 p 或 L 的成员接壤、f 不是 L 那边的;政体相同的先找),入 L 的集团(盟约记 cause = bloc,foe = f)
+   */
+  const tryBloc = (p: number, k: number, t: number): boolean => {
+    const P = pm.polities[p];
+    if (dm.liegeOf(p) >= 0 || dm.blocOf(p) >= 0) return false;
+    const pp = powerOf(p, t);
+    const [f] = mainThreat(p, t, pp);
+    if (f < 0) return false;
+    const rep = republicAt(p, t);
+    let best = -1;
+    let bestScore = 0;
+    for (const L of pm.polities) {
+      const l = L.id;
+      if (l === p || l === f || !alive(l) || modernSteps(L, t) < 2 || dm.liegeOf(l) >= 0 || fighting(l, p)) continue;
+      if (dm.blocOf(l) >= 0 && dm.blocOf(l) !== l) continue; // 别人集团里的成员不当盟主
+      if (dm.blocOf(f) === l || hates(pm, p, l, t) || hates(pm, l, p, t)) continue;
+      const pl = powerOf(l, t);
+      if (pl < BLOC_POWER * pp) continue;
+      const near = borders(p, l) || dm.blocMembers(l).some((m) => borders(p, m));
+      if (!near) continue;
+      // 政体相同的先找(共和找共和,君主找君主)
+      const score = pl * (borders(p, l) ? 1.5 : 1) * (republicAt(l, t) === rep ? 2 : 1);
+      if (score > bestScore) {
+        bestScore = score;
+        best = l;
+      }
+    }
+    if (best < 0) return false;
+    if (keyed4(dm.base, pm.ptag[p], pm.ptag[best], k, U_BLOC) >= BLOC_ODDS) return false;
+    const sid = capitalAt(P, t);
+    record('alliance', { a: p, b: best, region: pm.settlements[sid].region, settlement: sid, foe: f, cause: 'bloc' });
+    return true;
+  };
+
   sim.on(Ev.DiplomacyCheck, (k, p, t) => {
     powMemo.clear();
     const P = pm.polities[p];
@@ -539,6 +679,8 @@ export function installDiplomacy(sim: CivSim, pm: PolityModel, dm: DiplomacyMode
     sim.schedule(checkTime(dm, p, k + 1), Ev.DiplomacyCheck, k + 1, p);
     // 结亲(marriage.ts):不占"一次最多出一件事"
     api.diplomacy.marry?.(p, k, t);
+    // 本地分支 modern-pace 第二十六轮:地球联邦 —— 成立、各国加入
+    if (tryFederate(p, t) || tryJoinFed(p, k, t)) return;
     const L = dm.liegeOf(p);
     if (L >= 0) {
       tryDefect(p, L, k, t);
@@ -546,6 +688,7 @@ export function installDiplomacy(sim: CivSim, pm: PolityModel, dm: DiplomacyMode
     }
     for (const v of dm.vassalsOf(p)) if (tryAbsorb(p, v, k, t)) return;
     for (const x of dm.pactsOf(p)) if (tryLapse(x, p, k, t)) return;
+    if (tryBloc(p, k, t)) return;
     const pp = powerOf(p, t);
     const [f, ratio] = mainThreat(p, t, pp);
     if (f >= 0 && (trySubmit(p, f, ratio, k, t) || tryPact(p, f, ratio, k, t))) return;
@@ -565,7 +708,17 @@ export function installDiplomacy(sim: CivSim, pm: PolityModel, dm: DiplomacyMode
 
   /** x 向 y 宣战(不是援盟)之后:y 的盟国援盟 / 坐视不救,y 的宗主发兵来救 */
   api.war.onDeclare = (w: War, x: number, y: number, t: number) => {
+    // 本地分支 modern-pace:集体防御 —— y 在集团里、x 不是同一集团的:盟主和成员各有 BLOC_JOIN 的机会参战(不来不断盟)
+    const Ly = dm.blocOf(y);
+    if (Ly >= 0 && dm.blocOf(x) !== Ly) {
+      for (const z of [Ly, ...dm.blocMembers(Ly)]) {
+        // 不接壤的也宣战(打得到打不到另说:没有前线的仗僵持几年就议和)
+        if (z === y || z === x || !alive(z) || fighting(z, x) || halted(z, t) || busy(z)) continue;
+        if (keyed4(dm.base, pm.ptag[z], pm.ptag[x], Math.round(t * 256), U_BLOC_JOIN) < BLOC_JOIN) api.war.declare!(z, x, t, y, 'bloc');
+      }
+    }
     for (const z of dm.alliesOf(y)) {
+      if (dm.pactOf(z, y)?.bloc) continue; // 集团的盟约上面已经看过
       // 国家方针(policy.ts):z 把攻方当亲国的不出兵(盟约不断);把守方当亲国的更肯出兵,当仇国的不救(盟约就此断了)
       if (z === x || !alive(z) || friendly(z, x, t) || befriends(pm, z, x, t) || fighting(z, x) || halted(z, t) || busy(z) || !borders(z, x)) continue;
       let join = hates(pm, z, y, t) ? 0 : befriends(pm, z, y, t) ? FRIEND_JOIN : PACT_JOIN;
@@ -646,7 +799,7 @@ export function relationsAt(civ: Civ, year: Year): Relations {
   let pacts: Pact[] = [];
   for (const e of civ.annals) {
     if (e.year > year) break;
-    if (e.kind === 'alliance') pacts.push({ a: e.a, b: e.b, since: e.year, foe: e.foe ?? -1 });
+    if (e.kind === 'alliance') pacts.push({ a: e.a, b: e.b, since: e.year, foe: e.foe ?? -1, ...(e.cause === 'bloc' ? { bloc: true } : {}) });
     else if (e.kind === 'unally') pacts = pacts.filter((x) => !((x.a === e.a && x.b === e.b) || (x.a === e.b && x.b === e.a)));
     else if (e.kind === 'submit') liege.set(e.a, { liege: e.b, since: e.year });
     else if (e.kind === 'defect') liege.delete(e.a);

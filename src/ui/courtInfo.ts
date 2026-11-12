@@ -27,7 +27,7 @@ import { yearAt, yearShort, yearShortAt, type Era } from '../gen/era';
 import { lordsAt, type LordNow } from '../render/civ/control';
 import { Outcome, applyRule, newRules } from '../gen/civ/councilRules';
 import { FEUDAL_SHARE, formDims, lordShare, type FormChange, type FormFacts, type FormLook, type FormName } from '../gen/civ/story/polityForm';
-import { wan } from './fiscalInfo';
+import { moneyOf, wan, type Money } from './fiscalInfo';
 import { practicesAt } from '../gen/civ/story/practiceInfo';
 import { PRACTICES, Practice, hasPractice } from '../gen/civ/practices';
 
@@ -105,6 +105,8 @@ export interface CourtView {
   levyCost: number;
   tribute: number;
   lordKept: number;
+  /** 本地分支 modern-pace 第二十八轮:钱数的说法(万石 / 万两 / 亿元,随这国的时代) */
+  money: Money;
 }
 
 let owners: Owners | undefined;
@@ -142,6 +144,7 @@ export function courtView(civ: Civ, p: number, year: Year): CourtView {
     levyCost: row ? row.征费 * row.应缴 : 0,
     tribute: row && fiefs.length ? (row.截留自治 * FIEF_REMIT) / (1 - FIEF_REMIT) : 0,
     lordKept: row ? row.截留割据 : 0,
+    money: moneyOf(civ, p, year),
   };
 }
 
@@ -174,7 +177,7 @@ export function levySay(v: CourtView, era?: Era | null): string {
   const Y = yearAt(v.annals[taxBy].year, era);
   if (tax === 0) return `${Y}起复由地方代收：${LOCAL}`;
   const cost = wan(v.levyCost);
-  const spend = cost > 0 ? `朝廷每年多花约 ${cost} 万石` : '朝廷多派官吏到各州';
+  const spend = cost > 0 ? `朝廷每年多花约 ${v.money.n(v.levyCost)} ${v.money.unit}` : '朝廷多派官吏到各州';
   if (tax === 1) return `${Y}起和地方分成：各州多交一截，${spend}。`;
   return `${Y}起朝廷直征：各州多交一大截，${spend}。`;
 }
@@ -407,7 +410,7 @@ export function fiefSince(civ: Civ, p: number, v: CourtView, era?: Era | null): 
 /** 分封底下一句 */
 export function fiefFoot(v: CourtView): string {
   const t = wan(v.tribute);
-  return `封地一年只交岁贡${t > 0 ? `(约 ${t} 万石)` : ''},那里不容易生乱,起割据的机会少一半。管得到三成半以下的边州都算封地。`;
+  return `封地一年只交岁贡${t > 0 ? `(约 ${v.money.n(v.tribute)} ${v.money.unit})` : ''},那里不容易生乱,起割据的机会少一半。管得到三成半以下的边州都算封地。`;
 }
 
 /** 一处割据的名字:"崇门之野等七州" */
@@ -423,7 +426,7 @@ export function lordFoot(civ: Civ, p: number, v: CourtView, year: Year, era?: Er
   if (!v.lords.length) return `割据满 ${age} 年,朝廷才会议削藩。`;
   const P = civ.polities[p];
   const k = wan(v.lordKept);
-  const head = `名义上还归${P ? polityName(P, year) : '本国'},国界照旧画在国内;赋税一文不交${k > 0 ? `(一年约 ${k} 万石)` : ''}。`;
+  const head = `名义上还归${P ? polityName(P, year) : '本国'},国界照旧画在国内;赋税一文不交${k > 0 ? `(一年约 ${v.money.n(v.lordKept)} ${v.money.unit})` : ''}。`;
   // 议过的削藩:这几处割据起了以后、议的是它们
   const cuts = v.rules.events.map((i) => v.annals[i]).filter((e) => e.war === 1 && v.lords.some((w) => w.region === e.region && e.year >= w.start));
   if (!cuts.length) {

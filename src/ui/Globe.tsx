@@ -39,6 +39,7 @@
  * 开关就是"投影"切换里的 globe(ui/projection.ts;"图层与投影"弹层的投影、地图右下角的"地球仪 / 平面地图"按钮都改它,网址 proj=globe,旧的 view=globe 也认);
  * 经纬网和平面投影共用一个开关;中心经度和 mapWrap.ts 的中心互通(打开时从当前中心转起,停下来就记下正对着的经度)。
  */
+import { enterSystemView } from './spaceStore';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import type { World } from '../gen/world';
 import type { Raster } from '../gen/raster';
@@ -222,6 +223,13 @@ export interface GlobeApi {
   worldToClient(wx: number, wy: number): [number, number] | null;
   /** 经纬度(度)→ 屏幕坐标(clientX / clientY);在球的背面(或贴着边缘)= null */
   lonLatToClient(lon: number, lat: number): [number, number] | null;
+  /**
+   * 本地分支 modern-pace 第二十四轮(核战叠加层):经纬度(度)、离地高度 h(按球半径算,0 = 地面)→ 屏幕坐标;被球挡住 = null。
+   * 正射投影,升高 h 的点就是把地面那一点离球心的屏幕位移放大 1 + h 倍
+   */
+  lonLatAltToClient(lon: number, lat: number, h: number): [number, number] | null;
+  /** 本地分支 modern-pace 第二十四轮:某地(度)的往上在屏幕上的方向 [ux, uy] 和朝向 d(1 = 正对着看,0 = 边缘);在背面 = null */
+  upAt(lon: number, lat: number): { ux: number; uy: number; d: number } | null;
   /** 视图的指纹(转了、缩放了、球挪了位置就变)和相当于平面主图的几倍(作者标记按它决定写不写名字);还没量好尺寸 = null */
   viewSig(): { sig: string; k: number } | null;
 }
@@ -1989,6 +1997,31 @@ export function Globe({ world, raster, civ, geo, style, layer, look = 'classic',
     const [x, y, d] = lonLatToScreen(a.view, globeFrame(a.view, s.size.w, s.size.h, a.shift), lon, lat);
     return d > EDGE_D ? [r.left + x, r.top + y] : null;
   };
+  const llAltToClient = (lon: number, lat: number, h: number): [number, number] | null => {
+    const r = rootRef.current?.getBoundingClientRect();
+    if (!r || !s.size.w) return null;
+    const a = shownAt();
+    const f = globeFrame(a.view, s.size.w, s.size.h, a.shift);
+    const [x, y, d] = lonLatToScreen(a.view, f, lon, lat);
+    const k = 1 + Math.max(0, h);
+    const sx = f.cx + (x - f.cx) * k;
+    const sy = f.cy + (y - f.cy) * k;
+    // 在背面、投下来又落在球盘里 = 被球挡住;贴着地面的照 llToClient 的边缘规矩
+    if (d < 0 && Math.hypot(sx - f.cx, sy - f.cy) < f.R) return null;
+    if (h <= 0 && d <= EDGE_D) return null;
+    return [r.left + sx, r.top + sy];
+  };
+  const upAt = (lon: number, lat: number): { ux: number; uy: number; d: number } | null => {
+    if (!s.size.w) return null;
+    const a = shownAt();
+    const f = globeFrame(a.view, s.size.w, s.size.h, a.shift);
+    const [x, y, d] = lonLatToScreen(a.view, f, lon, lat);
+    if (d <= EDGE_D) return null;
+    const dx = x - f.cx;
+    const dy = y - f.cy;
+    const L = Math.hypot(dx, dy);
+    return L > 1e-6 ? { ux: dx / L, uy: dy / L, d } : { ux: 0, uy: -1, d };
+  };
   const worldToClient = (wx: number, wy: number): [number, number] | null => {
     const W = props.current.world;
     const [lon, lat] = worldToLonLat(wx, wy, W.width, W.height);
@@ -2016,6 +2049,8 @@ export function Globe({ world, raster, civ, geo, style, layer, look = 'classic',
     zoomBy: (f, cx, cy, live) => zoomBy(f, cx, cy, live),
     worldToClient,
     lonLatToClient: (lon, lat) => llToClient(lon * D, lat * D),
+    lonLatAltToClient: (lon, lat, h) => llAltToClient(lon * D, lat * D, h),
+    upAt: (lon, lat) => upAt(lon * D, lat * D),
     viewSig: () => {
       if (!s.size.w) return null;
       const a = shownAt();
@@ -2244,6 +2279,12 @@ export function Globe({ world, raster, civ, geo, style, layer, look = 'classic',
     const r = el.getBoundingClientRect();
     s.fly = null;
     s.inertia = null;
+    // 本地分支 modern-pace:已经缩到最小还往外缩 = 进恒星系视图(SystemView.tsx),带上这一刻地球仪的样子
+    if (f < 1 && s.view.k <= GLOBE_K_MIN * 1.0001) {
+      const fr = globeFrame(s.view, s.size.w, s.size.h, s.shift);
+      enterSystemView({ lon: s.view.lon, lat: s.view.lat, cx: r.left + fr.cx, cy: r.top + fr.cy, R: fr.R });
+      return;
+    }
     const k2 = Math.min(GLOBE_K_MAX, Math.max(GLOBE_K_MIN, s.view.k * f));
     s.view = zoomAt(s.view, s.size.w, s.size.h, cx - r.left, cy - r.top, k2, s.shift);
     if (live) wheeled();

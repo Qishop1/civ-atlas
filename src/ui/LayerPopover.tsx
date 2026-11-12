@@ -51,6 +51,7 @@ import { noteDismiss } from './dismissClick';
 import { terrainPatchPending } from './terrainPatch';
 import { baseReady, dropThumbPrep } from './thumbPrep';
 import { terrainStroking } from './TerrainTools';
+import { LOCK_HINT, useUnlocks } from './spaceStore';
 import { ThoughtPicker } from './ThoughtParts';
 import { pluginsUiOn } from './plugins/flag';
 import { PluginLayerChips } from './plugins/layerSlots';
@@ -289,6 +290,10 @@ export function LayerPopover({ base, fill, sat, civ = null, onBase, onFill, onSa
   const proj = useProjection();
   const rootRef = useRef<HTMLDivElement>(null);
   const name = baseName(base, sat);
+  // 本地分支 modern-pace:随时代解锁的底图(地理图 / 卫星 / 白模),没解锁的变灰、写明什么时候解锁
+  const unl = useUnlocks(civ);
+  const lockOf = (b: string): string | null =>
+    unl.all ? null : b === 'geo' && !unl.geo ? LOCK_HINT.geo : b === 'satellite' && !unl.satellite ? LOCK_HINT.satellite : b === 'blank' && !unl.blank ? LOCK_HINT.blank : null;
 
   useEffect(() => {
     if (!open) return;
@@ -348,7 +353,16 @@ export function LayerPopover({ base, fill, sat, civ = null, onBase, onFill, onSa
           <div className="lp-sec">底图</div>
           <div className="lp-layers" role="radiogroup" aria-label="底图">
             {MAIN_BASES.map((b) => (
-              <button key={b.id} className={`lp-layer${base === b.id ? ' on' : ''}`} role="radio" aria-checked={base === b.id} data-base={b.id} onClick={() => onBase(b.id)}>
+              <button
+                key={b.id}
+                className={`lp-layer${base === b.id ? ' on' : ''}${lockOf(b.id) ? ' locked' : ''}`}
+                role="radio"
+                aria-checked={base === b.id}
+                data-base={b.id}
+                disabled={!!lockOf(b.id)}
+                title={lockOf(b.id) ?? undefined}
+                onClick={() => onBase(b.id)}
+              >
                 <Thumb src={thumbs[baseThumb(b.id, sat)]} busy={pending?.base === b.id} />
                 <span>{b.name}</span>
               </button>

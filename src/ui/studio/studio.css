@@ -1641,3 +1641,258 @@
   font-size: 12.5px;
   color: var(--ink-2);
 }
+
+/* 本地分支 modern-pace:第一步「恒星系」(SystemStep.tsx):中间的示意图盖在星球上,星球和地名藏起来 */
+.st-orrery {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+  cursor: grab;
+  touch-action: none;
+}
+.st-orrery:active {
+  cursor: grabbing;
+}
+.st-orrery-bar {
+  position: absolute;
+  top: 12px;
+  z-index: 2;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: rgba(10, 12, 18, 0.72);
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+  color: rgba(220, 228, 240, 0.75);
+}
+.studio.sys-on .st-gl,
+.studio.sys-on .st-labels,
+.studio.sys-on .st-glow {
+  visibility: hidden !important;
+  pointer-events: none;
+}
+.sys-set .sys-info .sb-row-side {
+  white-space: normal;
+  text-align: right;
+}
+.sys-dist {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+.sys-dist small {
+  display: block;
+  margin-top: 2px;
+  opacity: 0.75;
+}
+.sys-dist input[type='range'] {
+  width: 100%;
+}
+.sys-ends {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  opacity: 0.65;
+}
+
+.sys-set {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 8px;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.sys-item {
+  display: block;
+  padding: 9px 12px;
+  background: rgba(255, 255, 255, 0.05);
+}
+.sys-item b {
+  display: block;
+  font-size: 13px;
+}
+.sys-item p {
+  margin: 3px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  opacity: 0.75;
+}
+.sys-item input[type='range'] {
+  width: 100%;
+  margin: 8px 0 2px;
+}
+
+.sys-item .sys-warn {
+  color: #ffb27a;
+  opacity: 1;
+}
+
+.sys-pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 6px 0 2px;
+  align-items: center;
+}
+.sys-chip {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.sys-chip.on {
+  background: rgba(70, 150, 255, 0.35);
+  border-color: rgba(110, 170, 255, 0.8);
+}
+.sys-chip:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.sys-pick select,
+.sys-list select,
+.sys-list input.au {
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 5px;
+  font: inherit;
+  font-size: 12px;
+  padding: 1px 3px;
+}
+.sys-list {
+  list-style: none;
+  margin: 6px 0 2px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+}
+.sys-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+.sys-list li.home {
+  color: #9cc6ff;
+}
+.sys-list .nm {
+  min-width: 4.5em;
+}
+.sys-list input.au {
+  width: 4.6em;
+}
+.sys-list .x {
+  margin-left: auto;
+  border: 0;
+  background: none;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+  font-size: 15px;
+}
+.sys-list .ring {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.sys-row {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  gap: 2px;
+}
+.sys-item b small {
+  font-weight: normal;
+  opacity: 0.6;
+  margin-left: 6px;
+}
+.sys-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.sys-note {
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+/* 行星表:每颗两行(名字 种类 距离 温度 / 卫星 环 删除);下拉的选项深色底 */
+.sys-list li.pl {
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.sys-list li.pl .tq {
+  white-space: nowrap;
+  opacity: 0.8;
+}
+.sys-list li.pl .br {
+  flex-basis: 100%;
+  height: 0;
+}
+.sys-list li.pl .tq2 {
+  min-width: 4.5em;
+  padding-left: 0.2em;
+  opacity: 0.8;
+  white-space: nowrap;
+}
+.sys-set select option {
+  background: #1d2028;
+  color: #e8ecf2;
+}
+
+.sys-list input.au.inc {
+  width: 3.2em;
+}
+
+.st-orrery-bar .sep {
+  width: 8px;
+}
+
+/* 示意图里选中的那颗的数据卡(左下) */
+.st-planet-card {
+  position: absolute;
+  bottom: 60px;
+  z-index: 2;
+  min-width: 230px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(14, 17, 24, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #e6ebf2;
+  font-size: 12px;
+}
+.st-planet-card .hd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.st-planet-card .hd b {
+  font-size: 13px;
+}
+.st-planet-card dl {
+  margin: 0;
+}
+.st-planet-card dl div {
+  display: flex;
+  gap: 10px;
+  line-height: 1.7;
+}
+.st-planet-card dt {
+  width: 5em;
+  opacity: 0.6;
+}
+.st-planet-card dd {
+  margin: 0;
+}

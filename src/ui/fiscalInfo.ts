@@ -14,6 +14,28 @@ export function wan(v: number): number {
   return Math.round(v / 10);
 }
 
+/**
+ * 本地分支 modern-pace 第二十八轮:钱数的说法随国家的时代换(账本照旧是千石):
+ * 工业以前按粮 "万石";工业时代按银 "万两"(1 石折 1 两);电气以后按钱 "亿元"(1 石折 100 元)。n = 千石 → 页面上的数(文字)
+ */
+export interface Money {
+  unit: string;
+  n: (k: number) => string;
+}
+export function moneyOf(civ: Civ, p: number, year: number): Money {
+  let steps = 0;
+  for (const t of civ.polities[p]?.modern ?? []) if (t <= year) steps++;
+  if (steps >= 2)
+    return {
+      unit: '亿元',
+      n: (k) => {
+        const v = Math.abs(k) / 1000;
+        return v >= 10 ? String(Math.round(v)) : v.toFixed(1).replace(/\.0$/, '');
+      },
+    };
+  return { unit: steps >= 1 ? '万两' : '万石', n: (k) => String(Math.abs(wan(k))) };
+}
+
 const DIGITS = '〇一二三四五六七八九';
 /** 几成:0.66 → "六成六",0.7 → "七成",不到一成 → "不到一成",满 → "全数" */
 export function chengText(x: number): string {

@@ -1,4 +1,5 @@
 import './theme.css';
+import { setCivMesh } from '../gen/civ/story/civMesh';
 import { Component, Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { endLoadWatch, reportOpenCrash } from './openGuard';
 import { createPortal, flushSync } from 'react-dom';
@@ -54,6 +55,10 @@ import { CivTimeline } from './CivTimeline';
 import { ExtendDock, ExtendPop, ExtendSheet } from './ExtendYears';
 import { extendProgress, extendStart, setExtendBusy, setExtendOpen } from './extendStore';
 import { EventPins, type WorldToClient } from './EventPins';
+import { NukeLayer } from './NukeLayer';
+import { NukeScarLayer } from './NukeScarLayer';
+import { CityLayer } from './CityLayer';
+import { WonderLayer } from './WonderLayer';
 import { DirectorCaption, DirectorEngine, DirectorPanels, DirectorPin } from './Director';
 import { directorHandBack, setDirectorMode, useDirectorOn } from './directorStore';
 import { StepDock, StepPins, StepReviewSheet, StepTimeline, StepwiseEngine, useStepCard, useStepReplay, useStepStrip } from './Stepwise';
@@ -276,6 +281,12 @@ import { useStoryFinder } from './world/useStoryFinder';
 import { firstRoute, readUrl, writeViewUrl } from './world/pageUrl';
 import { useRouteNav, useViewUrl } from './world/useRouteNav';
 import { useAutoSave, useSaveThumbs } from './world/useWorldSave';
+import { SpacePanel } from './SpacePanel';
+import { MoonView } from './MoonView';
+import { SystemView } from './SystemView';
+import { setPlanetParams } from '../gen/civ/story/systemText';
+import { exitSystemView } from './spaceStore';
+import { useSpaceUi, useUnlocks } from './spaceStore';
 import { useOpenRefs, type CivRefs, type GenProgress, type GenRefs, type MapFirst, type MapRefs, type RegenJob, type ResimRefs, type WorldViewRefs } from './world/worldRefs';
 import {
   draftModeOf,
@@ -476,6 +487,8 @@ function AppBody({ fromHome }: { fromHome?: HomeStart }) {
   }, [eraMaps, baseData, eraK]);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- patchVer:后台交来新的补丁时重拼
   const data = useMemo(() => (baseData ? eraData(baseData, eraMaps, eraPatches.current, eraK) : null), [baseData, eraMaps, patchVer, eraK]);
+  // 本地分支 modern-pace:恒星系跟着星球(地图种子 + 气温参数)走;渲染时就登记,编年史、航天面板、恒星系视图算的是同一个
+  setPlanetParams(data ? { seed: data.world.params.seed, temperature: data.world.params.temperature, ...(edits.system ? { spec: edits.system } : {}) } : null);
   /**
    * 整段历史(最后一段的州、地名,套上改名):编年史这类按它算(见 Civ.history);后台线程按同样的改名算好了编年史的直接用。
    * 改了名、编年史还在分小块算的时候,先照旧显示改名以前的样子,算好再换上(chronicleHandoff.ts);realNames = 现在套着的那份改名
@@ -500,6 +513,8 @@ function AppBody({ fromHome }: { fromHome?: HomeStart }) {
   }, [previewRaw, rawCiv, eraK]);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- eraView 只用到 eraK
   const civ = useMemo(() => (previewRaw && previewFull ? eraView(previewRaw, previewFull, preview!.names) : realCiv), [previewRaw, previewFull, eraK, preview?.names, realCiv]);
+  // 本地分支 modern-pace 第六十轮:城市带要量距离 —— 读存档打开的历史没经过 generateCiv,这里补记网格(地块数对得上才记)
+  if (data) for (const c of [rawCiv, realFull, previewRaw, previewFull, civ]) if (c && c.habitat.suitability.length === data.world.mesh.n) setCivMesh(c, data.world);
   /** 照大纲推演的提示条上写名字用(套上改名的那一份) */
   const realCivRef = useRef(realCiv);
   realCivRef.current = realCiv;
@@ -2436,14 +2451,40 @@ function AppBody({ fromHome }: { fromHome?: HomeStart }) {
     else flyRef.current('home');
     if (civ) startAutoplay(replayStart(civ.endYear));
   };
+  // 本地分支 modern-pace 第三十四轮:底图随时代解锁(spaceStore.ts)。wantBase = 手动选过的底图(没选过 = 自动:工业时代以前手绘、以后地理图、人造卫星以后卫星);
+  // 想要的那种还没解锁 = 退到地理图(解锁了的话)或手绘;拨回解锁以前、再拨回来,照旧换回想要的那种。没有历史(新建、改地形)不管
+  const unl = useUnlocks(draft || home ? null : civ);
+  // 恒星系视图:画母星借主图的地形画布;回到平面地图 = 退出恒星系视图
+  const getTerrainCanvas = useCallback(() => canvasRef.current, []);
+  useEffect(() => {
+    if (!globeOn) exitSystemView();
+  }, [globeOn]);
+  const moonOn = useSpaceUi().moon && unl.moon && !unl.all;
+  // 第五十一轮:夜景(有了电力以后)
+  const nightOn = useSpaceUi().night && unl.night && !unl.all;
+  // 只有点过底图才算手动选的(网址里的 map= 可能是自动换时写进去的,不算)
+  const wantBase = useRef<BaseId | null>(null);
+  useEffect(() => {
+    if (unl.all) return;
+    const want: BaseId = wantBase.current ?? (unl.satellite ? 'satellite' : unl.geo ? 'geo' : 'fantasy');
+    const ok = (b: BaseId) => (b === 'geo' ? unl.geo : b === 'satellite' ? unl.satellite : b === 'blank' ? unl.blank : true);
+    const target: BaseId = ok(want) ? want : unl.geo ? 'geo' : 'fantasy';
+    if (target !== mapBase && !pendingBase) pickBase(target);
+  }, [unl, mapBase, pickBase, pendingBase]);
   const layerProps = {
     base: mapBase,
     fill: mapFill,
     sat: satLook,
     civ,
-    onBase: pickBase,
+    onBase: (b: BaseId) => {
+      wantBase.current = b;
+      pickBase(b);
+    },
     onFill: (fill: FillId) => applyMapView({ fill }),
-    onSat: (sat: SatLook) => pickBase('satellite', sat),
+    onSat: (sat: SatLook) => {
+      wantBase.current = 'satellite';
+      pickBase('satellite', sat);
+    },
     pending: pendingBase,
     thumbs,
     requestThumbs,
@@ -2629,6 +2670,10 @@ function AppBody({ fromHome }: { fromHome?: HomeStart }) {
           {data && <MapDecor world={data.world} style={style} ink={contourStyle} view={view} mp={mp} />}
         </div>
         {/* 放大后的文明细节层(CivLayer 放进来):盖住下面的地形,在文明底图那一层地图框之下 */}
+        {/* 本地分支 modern-pace:城市的样子(夜景、城区)—— 平面图上垫在国界、城名下面 */}
+        {data && world && !globeOn && <CityLayer civ={draft || home ? null : civ} world={data.world} raster={data.raster} toClient={worldToClient} urban={style === 'realistic' && surface !== 'geo' && surface !== 'geoMute'} night={nightOn} hidden={replayOn} />}
+        {/* 第六十八轮:核痕放在文字层下面(正片叠底叠在字上会把城名、描边一起压暗,"字都炸糊了") */}
+        {data && world && !globeOn && <NukeScarLayer civ={civ} world={data.world} raster={data.raster} toClient={worldToClient} globe={null} hidden={replayOn} />}
         <div className={`screen-layer${namesIn ? ' names-in' : ''}`} ref={setCivDetailHost} style={screenStyle} />
         <div className="canvas-wrap-upper" data-hold={hold} style={wrapStyle}>
           <div className="map-box-upper" data-hold={hold} style={{ width: box.w, height: box.h }}>
@@ -2656,7 +2701,12 @@ function AppBody({ fromHome }: { fromHome?: HomeStart }) {
           </div>
         )}
         {/* 地图上钉在事发地的事件标签;导播开着时播放经过的大事换成导播的圆环 + 名牌(Director.tsx),点编年史跳过去的照旧 */}
+        {data && world && globeOn && <CityLayer civ={draft || home ? null : civ} world={data.world} raster={data.raster} toClient={globeToClient} urban={style === 'realistic' && surface !== 'geo' && surface !== 'geoMute'} night={nightOn} hidden={replayOn} />}
+        {/* 第六十八轮:地球仪上的核痕(平面图的在文字层下面,见上) */}
+        {data && world && globeOn && <NukeScarLayer civ={civ} world={data.world} raster={data.raster} toClient={globeToClient} globe={globeApi} hidden={replayOn} />}
+        {data && world && <WonderLayer civ={civ} world={data.world} toClient={globeOn ? globeToClient : worldToClient} globe={globeOn ? globeApi : null} hidden={replayOn} />}
         {data && world && <EventPins civ={civ} world={data.world} toClient={globeOn ? globeToClient : worldToClient} hidden={replayOn || filmOn} quiet={directing} />}
+        {data && world && <NukeLayer civ={civ} world={data.world} toClient={globeOn ? globeToClient : worldToClient} globe={globeOn ? globeApi : null} hidden={replayOn} />}
         {/* 照故事找世界:选中的那个世界上故事里各国、隘口、交界的小牌子 */}
         {finderOn && <FinderPins ui={finder} phone={narrow} preview={finderPreviewData} toClient={globeOn ? globeToClient : worldToClient} />}
         {data && world && <DirectorPin toClient={globeOn ? globeToClient : worldToClient} hidden={directorOff || stepQuiet} />}
@@ -2816,7 +2866,8 @@ function AppBody({ fromHome }: { fromHome?: HomeStart }) {
             />
           )}
           {!draft && <MapBar civ={civ} layers={layerProps} exp={{ data, civ, plain: plainCiv, style, layer, look: terrainLook }} />}
-          {!draft && (OLD_SITE !== null || BETA_SITE || workOn || relBack || ((style === 'data' || atlasOn || contourOn || ideoLegend || plgLegend) && !terrainTool.on)) && (
+          {!draft && !home && <SpacePanel civ={civ} />}
+          {!draft && !moonOn && (OLD_SITE !== null || BETA_SITE || workOn || relBack || ((style === 'data' || atlasOn || contourOn || ideoLegend || plgLegend) && !terrainTool.on)) && (
             <div className="corner-tl">
               {relBack && civ && <RelationBack civ={civ} />}
               {workBar}
@@ -2857,7 +2908,10 @@ function AppBody({ fromHome }: { fromHome?: HomeStart }) {
       {/* 逐年推演里演一国:顶上常驻的方针条(提示条出来时让开) */}
       {data && world && civ && <RoleBar civ={civ} phone={narrow} />}
       {/* 右下(时间轴上方):地球 / 平面、放大、缩小。触屏不放 + −(用双指捏合);窄屏整个不放(地球在右上竖排的按钮里) */}
+      {!draft && !home && <MoonView civ={civ} />}
+      {!draft && !home && <SystemView civ={civ} terrain={getTerrainCanvas} />}
       <MapControls
+        civ={draft || home ? null : civ}
         globeOn={globeOn}
         onToggleGlobe={toggleGlobe}
         onZoom={zoomButton}

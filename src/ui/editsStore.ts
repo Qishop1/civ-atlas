@@ -543,6 +543,24 @@ export function setOrigins(o: Origins | undefined) {
 }
 
 /** 文明种子(新建世界、打造文明时定,不记撤销步);undefined = 跟着地图种子,去掉这一项 */
+/** 本地分支 modern-pace:下一次换世界(换了种子)时把这份恒星系带过去(选别的行星当母星用);取一次就清 */
+let carried: import('../gen/system').SystemSpec | null = null;
+export function carrySystemSpec(spec: import('../gen/system').SystemSpec | null) {
+  carried = spec;
+}
+export function takeCarriedSystem(): import('../gen/system').SystemSpec | null {
+  const c = carried;
+  carried = null;
+  return c;
+}
+
+/** 本地分支 modern-pace:改恒星系规格(null = 回到按种子随机) */
+export function setSystemSpec(spec: import('../gen/system').SystemSpec | null) {
+  const { system: _old, ...rest } = state;
+  void _old;
+  put(spec ? { ...rest, system: spec } : rest);
+}
+
 export function setCivSeed(seed: number | undefined) {
   const next = cleanCivSeed(seed);
   if (next === state.civSeed) return;

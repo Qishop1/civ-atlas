@@ -93,7 +93,13 @@ export function evType(e: Pick<ChronicleEntry, 'kind'> & Partial<Pick<ChronicleE
 
 /** 一字标签 → 卡片上的类型名 */
 const TAG_LABEL: Readonly<Record<string, string>> = {
+  名: '改名',
+  并: '城市带',
+  学: '科学',
   立: '立国',
+  核: '核武',
+  联: '地联',
+  天: '航天',
   兴: '兴起',
   升: '升格',
   降: '衰微',

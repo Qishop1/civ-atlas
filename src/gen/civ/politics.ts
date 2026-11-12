@@ -57,7 +57,13 @@ import { geometryOf, type Geometry } from '../geometry';
 import { AdjKind, Layer, type AnnalCause, type Civ, type Polity, type Year } from './types';
 import { fexp, flog, keyed, keyed4, subSeed } from './engine/rand';
 import { BOOKED_AT_START, bookChain, quantize, type CivSim } from './engine/sim';
-import { addPolity, canCross, coreOf, endPolity, foundingYear, moveCapital, polityModelOf, sailsOcean, type PolityModel } from './polities';
+import { addPolity, canCross, coreOf, endPolity, foundingYear, modernSteps, moveCapital, polityModelOf, sailsOcean, type PolityModel } from './polities';
+
+/** 本地分支 modern-pace:民族自决 —— 国都进了近现代的国家,异族的州离心力每档再加 NATION_D;分裂后歇 SPLIT_REST_MODERN 年(古代 SPLIT_REST) */
+const NATION_D = 0.5;
+const SPLIT_REST_MODERN = 40;
+/** 本地分支 modern-pace 第三十一轮:地球联邦里分裂的机会还剩几成(各族自治,离心力也减半) */
+const FED_SPLIT = 0.3;
 import { warModelOf, type WarModel } from './wars';
 import { capacityAt, capitalAt, populationAt } from './growth';
 import type { ControlModel } from './control';
@@ -437,7 +443,9 @@ function hook(sim: CivSim, pol: PoliticsModel): void {
     // 从海洋国家分出去的普通国家也不带
     const P0 = pm.polities[parent];
     const sail = pm.cultures[culture[capR]].kind !== 'sea' && sailsOcean(pm, P0, t) && (P0.kind !== 'sea' || Number.isFinite(pm.k.SAIL_LEVEL)) ? { sail: t } : {};
-    const p = addPolity(pm, sid, culture[capR], t, { parent, ...sail, ...extra });
+    // 本地分支 modern-pace:从近现代国家分出去的,国号立刻用近现代的说法(只管显示)
+    const modernName = modernSteps(P0, t) >= 1 ? { modernName: t } : {};
+    const p = addPolity(pm, sid, culture[capR], t, { parent, ...sail, ...modernName, ...extra });
     sim.setOwner(Layer.Polity, capR, p.id, Ev.Split);
     for (const r of group) if (r !== capR) sim.setOwner(Layer.Polity, r, p.id, Ev.Split);
     sim.record(kind, { a: p.id, b: parent, region: rising, settlement: sid, ...(cause ? { cause } : {}) });
@@ -461,7 +469,7 @@ function hook(sim: CivSim, pol: PoliticsModel): void {
   const canSplit = (P: Polity, t: number) =>
     pm.size[P.id] >= SPLIT_MIN_SIZE &&
     t - P.founded >= SPLIT_AGE &&
-    t - (pol.lastSplit.get(P.id) ?? -Infinity) >= SPLIT_REST &&
+    t - (pol.lastSplit.get(P.id) ?? -Infinity) >= (modernSteps(P, t) >= 1 ? SPLIT_REST_MODERN : SPLIT_REST) &&
     !wm.iv?.unites(P.id, t); // 阶段 4 干预"禁止分裂"
   const trySplit = (P: Polity, k: number, t: number, mine: readonly number[]): boolean => {
     const pid = P.id;
@@ -475,12 +483,14 @@ function hook(sim: CivSim, pol: PoliticsModel): void {
     const lords = cm ? cm.mark(pid, t) : 0;
     let r0 = -1;
     let s0 = -Infinity;
+    const ms = modernSteps(P, t);
     for (const r of mine) {
       if (r === capR) continue;
       // 离国都远:有"中央管到什么程度"(control.ts)时路程按行政能力折算(行政越强,远处越不算远),割据的州再加一截
       let d = cm ? cm.remote(pid, r, t) : Math.min(4, dist[r] / SPLIT_REACH); // 走不到国都(Infinity)的州按 4 算
       if (lords && cm!.inLord(r)) d += LORD_D;
-      if (culture[r] !== P.culture) d += FOREIGN_D;
+      // 第三十一轮:地球联邦给各族自治,异族的离心力减半、不再按近现代加码
+      if (culture[r] !== P.culture) d += P.federation !== undefined ? FOREIGN_D * 0.5 : FOREIGN_D + NATION_D * ms;
       const age = t - wm.since[r];
       if (wm.prev[r] >= 0 && wm.prev[r] !== pid && age < RECENT) d += RECENT_D * (1 - age / RECENT);
       dis[r] = d;
@@ -493,7 +503,7 @@ function hook(sim: CivSim, pol: PoliticsModel): void {
     }
     if (r0 < 0) return false;
     const d0 = dis[r0];
-    const odds0 = SPLIT_ODDS * fexp(SPLIT_K * (d0 + g - SPLIT_D0));
+    const odds0 = SPLIT_ODDS * fexp(SPLIT_K * (d0 + g - SPLIT_D0)) * (P.federation !== undefined ? FED_SPLIT : 1);
     const oddsIn = sim.influence?.get('split.odds');
     const odds = oddsIn ? odds0 * mulOf(oddsIn, pid) : odds0;
     if (keyed(pol.base, pm.ptag[pid], k, U_SPLIT) >= odds / (1 + odds)) return false;
@@ -534,7 +544,8 @@ function hook(sim: CivSim, pol: PoliticsModel): void {
     // 新国都是某个同族亡国的故都:这一次起兵就是复国;起事的州割据着(control.ts)= 割据多年,终于自立
     const f = heirOf(sid, t);
     const lord = !f && lords > 0 && cm!.inLord(r0);
-    secede(pid, full, sid, r0, t, f ? { restores: f.id, lineage: f.lineage } : {}, 'split', lord ? 'warlord' : undefined);
+    // 第三十一轮:从地球联邦分出去的是分离公投(和平脱离)
+    secede(pid, full, sid, r0, t, f ? { restores: f.id, lineage: f.lineage } : {}, 'split', P.federation !== undefined ? 'referendum' : lord ? 'warlord' : undefined);
     if (f) pol.restored.add(f.id);
     return true;
   };
@@ -848,7 +859,9 @@ function hook(sim: CivSim, pol: PoliticsModel): void {
       if (nearCapital(r, EDGE_SPACING * pm.spacing, caps)) continue;
       // 国号一系(王国 / 共和国)沿用那一国的;游牧的汗国和定居的国家不互相沿用
       const nomad = pm.cultures[culture[r]].kind === 'nomad' || M.lineage === 'khanate';
-      const p = addPolity(pm, s.id, culture[r], t, nomad ? { mentor: m } : { mentor: m, lineage: M.lineage });
+      // 本地分支 modern-pace 第二十三轮:受近现代国家影响立的国,国号一开始就用近现代的说法(不叫"某某部")
+      const modernName = modernSteps(M, t) >= 1 ? { modernName: t } : {};
+      const p = addPolity(pm, s.id, culture[r], t, nomad ? { mentor: m, ...modernName } : { mentor: m, lineage: M.lineage, ...modernName });
       sim.setOwner(Layer.Polity, r, p.id, Ev.PolityFound);
       sim.record('found', { a: p.id, b: m, region: r, settlement: s.id });
       caps[r] = 1;

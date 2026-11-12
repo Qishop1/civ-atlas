@@ -25,6 +25,9 @@ export interface DevRuleConsts {
   CAPS: readonly string[];
   /** 五种能力里前四样的下标:生产、运输、信息、行政 */
   ERA_YEARS: readonly number[];
+  /** 本地分支 modern-pace:邻州时代过了 DIFFUSE_FROM 以后,向它学每高一档快 DIFFUSE_UP 倍(近现代的技术传得快) */
+  DIFFUSE_FROM: number;
+  DIFFUSE_UP: number;
   LEVEL_MAX: number;
   LEARN: readonly number[];
   SAME_STATE: number;
@@ -92,6 +95,13 @@ export function devCards(k: DevRuleConsts, step: number, rate = false): TableCar
     pol('重点', '发展重点:自己长的倍数', 1, [生产, 运输, 信息, 行政]),
     pol('重点动员', '发展重点:挑动员的时间占几成', 0),
     num('凋敝', '这一步里全球大疫的凋敝占了几成(0–1;没有 = 0)'),
+    // 本地分支 modern-pace:科技树卡住的上限(某样发明的前置世上还没齐,这样能力就长不过那一档;没卡 = LEVEL_MAX)
+    num('科顶', '四样能力被科技树卡住的上限', [生产, 运输, 信息, 行政], k.LEVEL_MAX),
+    // 本地分支 modern-pace:信息革命以后的起飞(本州已有半导体、集成电路、互联网……各乘一截;没有 = 1)
+    num('起飞', '信息技术反过来加速研发的倍数', undefined, 1),
+    // 本地分支 modern-pace:亮全图(世上有了通信卫星以后,每州向全世界最先进的水平靠拢)
+    num('世界顶', '这一样能力全世界最高的', [生产, 运输, 信息, 行政], 0),
+    num('全球化', '向全世界最高水平靠拢的速度(每年每差一档;世上还没有通信卫星 = 0)', undefined, 0),
     num('推', '推一把发展:这一步里自己长、向邻居学的倍数(没推 = 1)', undefined, 1),
     ...(rate ? [num('速', '推演插件给的五种能力长得多快的倍数', k.CAPS, 1)] : []),
   ];
@@ -121,14 +131,20 @@ export function devCards(k: DevRuleConsts, step: number, rate = false): TableCar
     '  if(有国, 0.3 + 0.15 * 国号 + 0.2 * min(1, 州数 / ADMIN_SIZE) + if(国都, 0.4, 0) + 0.3 * min(1, (year - 立国) / 400), 0.15))))',
     // 向这样能力最高的有人住的邻州学;行政跨国只剩几成
     // (乘 1 不改变一个数:写成 link × (跨国的行政 ? ADMIN_ABROAD : 1),和"跨国的行政取 link × ADMIN_ABROAD、别的取 link"逐位一样)
-    `let 学 = nbmax((nb.能力 - 能力) * LEARN[col] * (${link} * if(col == 3 and not ${same}, ADMIN_ABROAD, 1)), 0, ${nbLive} and nb.能力 - 能力 > 0)`,
+    `let 学 = nbmax((nb.能力 - 能力) * LEARN[col] * (${link} * if(col == 3 and not ${same}, ADMIN_ABROAD, 1) * (1 + DIFFUSE_UP * max(0, nb.时代 - DIFFUSE_FROM))), 0, ${nbLive} and nb.能力 - 能力 > 0)`,
     // 跨时代的门槛:离下一个时代不到 GATE_NEAR 时查物产(只卡生产)、组织、太平和城、地理
     'let 门 = floor(能力) + 1',
     'let 近门 = 能力 > floor(能力) + 1 - GATE_NEAR',
     `let 缺物 = col == 0 and if(门 == 1, ${lack(0)}, if(门 == 2, ${lack(1)}, if(门 == 5, ${lack(2)} or ${lack(1)}, if(门 == 6, ${lack(3)}, if(门 == 7, ${lack(4)}, 0)))))`,
     `let 不够 = (门 >= 2 and not 有国) or (门 >= 3 and (国号 < 1 or 能力.${行政} < 门 - ADMIN_GAP)) or (门 >= 4 and (战乱 > WAR_CALM or 路 == 0)) or (门 >= 5 and not (港口 or 大河 or 平原))`,
     // 自己长:动力 ÷ 这一档要的年数,打仗的地方慢;发展重点;领先时代太多、卡在门口时慢
-    `let ${rate ? '本长' : '长0'} = 动力 * 和平 / ERA_YEARS[min(ERA_YEARS_LAST, floor(能力))] * 重点 * if(能力 > 时代 + OVERSHOOT, OVERSHOOT_SLOW, 1)`,
+    // 本地分支 modern-pace:火药以后,本条落后本州最领先那条越多长得越快(技术外溢:有了蒸汽机就会去造铁路);近现代领先减速的门槛放宽;信息革命以后乘起飞倍数
+    `let 领先 = max(max(能力.${生产}, 能力.${运输}), max(能力.${信息}, 能力.${行政}))`,
+    // 第九轮:未来时代(8 以后)不外溢、不起飞,未来科技慢慢来
+    'let 外溢 = if(时代 >= SPILL_FROM and 能力 < 8, 1 + SPILL * max(0, 领先 - 能力), 1)',
+    'let 飞 = if(能力 < 8, 起飞, 1)',
+    'let 越线 = OVERSHOOT + if(时代 >= SPILL_FROM + 1, OVERSHOOT_MODERN, 0)',
+    `let ${rate ? '本长' : '长0'} = 动力 * 和平 / ERA_YEARS[min(ERA_YEARS_LAST, floor(能力))] * 重点 * 外溢 * 飞 * if(能力 > 时代 + 越线, OVERSHOOT_SLOW, 1)`,
     // 推一把发展再乘「推」:卡在门口时不乘(和没推一样慢);生产到了门口、缺下一个时代要的物产的州,四样都不乘(停在门口,等邻居传过来);
     // 过不去的门槛乘出来的那一截至多长到门口,不会一步跨过去
     'let 卡 = 缺物 or 不够',
@@ -143,11 +159,14 @@ export function devCards(k: DevRuleConsts, step: number, rate = false): TableCar
     ...(rate ? [`let 得 = min(本得 * 速[col], max(本得, nbmax(nb.能力 - 能力, 0, ${nbLive} and nb.能力 - 能力 > 0) / dt))`] : []),
     // 跌下去的按到过的最高值较快地恢复
     'let 复 = (最高[col] - 能力) * RECOVER',
-    'let 平常 = 能力 + dt * (长 + 得 + if(复 > 0, 复, 0))',
+    // 本地分支 modern-pace:全球化 —— 差得越多追得越快(只追到世界顶,不超过)
+    'let 全球学 = 全球化 * max(0, 世界顶 - 能力)',
+    'let 平常 = 能力 + dt * (长 + 得 + 全球学 + if(复 > 0, 复, 0))',
     // 全球大疫的凋敝里(占这一步的几成):不自己长、不恢复,向邻居学只剩 SLUMP_LEARN(没有凋敝的照平常算,逐位一样)
     'let 新 = if(凋敝 > 0, 能力 + dt * ((1 - 凋敝) * (长 + 得 + if(复 > 0, 复, 0)) + 凋敝 * SLUMP_LEARN * 得), 平常)',
     'let 封顶 = if(col == 3 and not 有国 and 新 > TRIBAL_ADMIN_MAX, max(能力, TRIBAL_ADMIN_MAX), 新)',
-    settled('能力', 'min(LEVEL_MAX, 封顶)'),
+    // 本地分支 modern-pace:长过科技树卡住的那一档的,停在那一档(本来就在上面的不往下拉)
+    settled('能力', 'min(LEVEL_MAX, if(封顶 > 科顶, max(能力, 科顶), 封顶))'),
   ].join('\n');
 
   const mobRule = [
@@ -195,6 +214,11 @@ export function devCards(k: DevRuleConsts, step: number, rate = false): TableCar
   const consts: Record<string, number | readonly number[]> = {
     ERA_YEARS: k.ERA_YEARS,
     ERA_YEARS_LAST: k.ERA_YEARS.length - 1,
+    DIFFUSE_FROM: k.DIFFUSE_FROM,
+    SPILL: 0.8,
+    SPILL_FROM: 4,
+    OVERSHOOT_MODERN: 0.6,
+    DIFFUSE_UP: k.DIFFUSE_UP,
     LEVEL_MAX: k.LEVEL_MAX,
     LEARN: k.LEARN,
     SAME_STATE: k.SAME_STATE,

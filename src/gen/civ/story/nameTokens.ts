@@ -23,6 +23,8 @@ import { regionLabel } from './display';
 import { coreRoot } from './peopleText';
 import { fullChronicle } from './religionText';
 import { treatyName } from './treatyInfo';
+import { cityNameAt } from './cityNames';
+import { beltStem, firstChar } from './cityBelts';
 
 /** 选择最多嵌几层 */
 const NAME_IF_DEPTH = 4;
@@ -112,15 +114,28 @@ function currentName(named: Civ, ref: string): string {
 
 /** 名字套进写法 */
 function applyForm(form: string, name: string): string {
+  // 本地分支 modern-pace 第五十七轮:0 = 城的原名(不按年份换),写法上不改
+  if (form === '0') return name;
   if (form === 'c') return coreRoot(name);
+  // 本地分支 modern-pace 第六十轮:城市带"大某某"用的城名(去掉镇、关、渡……)
+  if (form === 'b') return beltStem(name);
+  if (form === 'f') return firstChar(name);
   if (form === 'n') return splitSurname(name);
   return polityNameForm(form, name);
 }
 
 /** 一个换占位符的函数:先按当前的名字选写法,再把名字换上;同一个占位符只算一次 */
-export function nameRestorer(named: Civ): (text: string) => string {
+export function nameRestorer(named: Civ): (text: string, year?: number) => string {
   const memo = new Map<string, string>();
+  // 本地分支 modern-pace 第五十七轮:城名按那条史事的年份换成当时的名字(城市改名,cityNames.ts);写法记号 0 = 原名
+  let atYear: number | undefined;
   const one = (token: string, ref: string, forms: string): string => {
+    if (atYear !== undefined && ref.charCodeAt(0) === 115 && !forms.split(NAME_FORM_MARK).includes('0')) {
+      const sid = Number(ref.slice(1));
+      let nm = cityNameAt(named, sid, atYear);
+      if (forms) for (const f of forms.split(NAME_FORM_MARK)) if (f) nm = applyForm(f, nm);
+      return nm;
+    }
     let hit = memo.get(token);
     if (hit !== undefined) return hit;
     hit = currentName(named, ref);
@@ -133,8 +148,9 @@ export function nameRestorer(named: Civ): (text: string) => string {
     const [test, name, arg] = cond.split(NAME_IF_ARG);
     return testName(test as NameTest, names(name), names(arg)) ? yes : no;
   };
-  return (text) => {
+  return (text, year) => {
     if (!hasNameToken(text)) return text;
+    atYear = year;
     let t = text;
     // 嵌套的选择:一趟换掉最里层的。真实的文字最多嵌一层,这里限趟数防文件里的坏文字
     for (let pass = 0; pass < NAME_IF_DEPTH && hasNameIf(t); pass++) t = t.replace(NAME_IF_RE, choose);
@@ -143,10 +159,12 @@ export function nameRestorer(named: Civ): (text: string) => string {
 }
 
 /** 带占位符的条目换回名字:一条里没有占位符的原样用(存的原文) */
-export function restoreEntries(entries: readonly ChronicleEntry[], named: Civ, restore: (text: string) => string = nameRestorer(named)): ChronicleEntry[] {
+export function restoreEntries(entries: readonly ChronicleEntry[], named: Civ, restore: (text: string, year?: number) => string = nameRestorer(named)): ChronicleEntry[] {
   return entries.map((e) => {
-    const out: ChronicleEntry = { ...e, text: restore(e.text) };
-    if (e.head !== undefined) out.head = restore(e.head);
+    // 城名按这一条的年份(改名那一年本身算改名以前)
+    const y = e.year - 1e-6;
+    const out: ChronicleEntry = { ...e, text: restore(e.text, y) };
+    if (e.head !== undefined) out.head = restore(e.head, y);
     if (e.children) out.children = restoreEntries(e.children, named, restore);
     return out;
   });

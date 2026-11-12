@@ -43,7 +43,8 @@ import { fpow, keyed, keyed4, subSeed } from './engine/rand';
 import { quantize, type CivSim } from './engine/sim';
 import { polityModelOf, sailsOcean, type PolityModel } from './polities';
 import { unrestModelOf } from './unrest';
-import { populationAt } from './growth';
+import { capitalAt, populationAt } from './growth';
+import { eraNowAt } from './development';
 import {
   IV_LOSS,
   PANDEMIC_K,
@@ -130,6 +131,19 @@ const U_PAN_SPREAD = 7;
 const U_PAN_CROSS = 8;
 const U_PAN_SHIP = 9;
 const U_PAN_SPARE = 10;
+/** 本地分支 modern-pace 第三十二轮:现代传染病 —— 起不起、航空网络、关不关口岸 */
+const U_MODERN = 11;
+const U_AIR = 12;
+const U_CLOSE = 13;
+/** 起疫那城进了电气时代时真起的机会;航空网络:百万人(千人单位 1000)以上的城,按人口(到 AIR_REF 封顶)× AIR_P;
+ *  关闭口岸的机会(按国都的时代:电气、信息、未来)、关了以后航空 / 陆上传进来还剩几成 */
+const MODERN_KEEP = 0.3;
+const AIR_MIN = 1000;
+const AIR_REF = 5000;
+const AIR_P = 0.35;
+const CLOSE_P = [0.35, 0.6, 0.8];
+const CLOSE_AIR = 0.12;
+const CLOSE_LAND = 0.2;
 
 // ---------------------------------------------------------------------------
 // 模型
@@ -149,6 +163,8 @@ interface Outbreak {
   hit: Uint8Array;
   /** 上一年刚染疫的州(按州号排) */
   front: number[];
+  /** 本地分支 modern-pace 第三十二轮:现代传染病 —— 这一场最多传几年(不是 = 不给;史事 plague 的 n 列记着) */
+  modern?: number;
 }
 
 export interface PlagueModel {
@@ -245,6 +261,16 @@ function hook(sim: CivSim, pl: PlagueModel, calamity: Calamity | undefined): voi
   const lossIn = sim.influence?.get('plague.loss') ? sim.influence : null;
   const withLoss = (x: number, r: number): number => (lossIn ? Math.round(Math.min(PLAGUE_LOSS_CAP, x * lossIn.get('plague.loss')![r]) * 1000) / 1000 : x);
 
+  /**
+   * 本地分支 modern-pace 第二十三轮:染疫的州进了工业以后死的人打折(防疫、医疗;工业 0.6、电气 0.3、信息 0.1、未来 0.05)。
+   * 作者下的瘟疫(定了死几成的)照下令的,不打折
+   */
+  const ERA_KEEP = [1, 1, 1, 1, 1, 0.6, 0.3, 0.1, 0.05];
+  const eraKeep = (x: number, r: number): number => {
+    const er = eraNowAt(sim, r);
+    return er < 5 ? x : Math.round(x * ERA_KEEP[Math.min(ERA_KEEP.length - 1, Math.floor(er))] * 1000) / 1000;
+  };
+
   /** 州 r 此刻有人烟的城(没有 = −1) */
   const cityNow = (r: number, t: number): number => {
     const sid = pm.cityOf[r];
@@ -262,7 +288,7 @@ function hook(sim: CivSim, pl: PlagueModel, calamity: Calamity | undefined): voi
       const s = pm.settlements[sid];
       if (ob.pan !== undefined) {
         // 全球大疫:折损带凋敝结束那年(无人收拾,之前不长回来),记进全球大疫的状态
-        const loss = fixed ?? panLossOf(K, base, ob.k, reg.seat[r], ob.level, populationAt(s, t), !!pm.port[r], Math.round(t - ob.t0));
+        const loss = fixed ?? eraKeep(panLossOf(K, base, ob.k, reg.seat[r], ob.level, populationAt(s, t), !!pm.port[r], Math.round(t - ob.t0)), r);
         (s.sacks ??= []).push({ year: t, loss, cause: 'plague', until: ob.pan, pan: ob.k });
         pl.onPandemicHit?.(ob.k, r, sid, t, loss);
         const p = owner[r];
@@ -273,7 +299,7 @@ function hook(sim: CivSim, pl: PlagueModel, calamity: Calamity | undefined): voi
         continue;
       }
       const loss =
-        fixed ?? (ob.level ? ivLossOf(base, ob.k, reg.seat[r], ob.level) : withLoss(lossOf(K, base, ob.k, reg.seat[r], ob.great, populationAt(s, t), !!pm.port[r], rate), r));
+        fixed ?? (ob.level ? ivLossOf(base, ob.k, reg.seat[r], ob.level) : eraKeep(withLoss(lossOf(K, base, ob.k, reg.seat[r], ob.great, populationAt(s, t), !!pm.port[r], rate), r), r));
       (s.sacks ??= []).push({ year: t, loss, cause: 'plague' });
       const p = owner[r];
       if (p < 0) continue;
@@ -286,7 +312,7 @@ function hook(sim: CivSim, pl: PlagueModel, calamity: Calamity | undefined): voi
       const l = per.get(p)!;
       let worst = l[0];
       for (const x of l) if (x[1] > worst[1] || (x[1] === worst[1] && x[0] < worst[0])) worst = x;
-      const cause = ob.pan !== undefined ? { cause: 'pandemic' as const } : ob.great ? { cause: 'great' as const } : {};
+      const cause = ob.pan !== undefined ? { cause: 'pandemic' as const } : ob.modern !== undefined ? { cause: 'modern' as const, n: ob.modern } : ob.great ? { cause: 'great' as const } : {};
       sim.record('plague', { a: p, b: l.length, region: worst[0], settlement: pm.cityOf[worst[0]], war: ob.k, ...cause });
       if (um) {
         let ul = um.plagues.get(p);
@@ -332,16 +358,43 @@ function hook(sim: CivSim, pl: PlagueModel, calamity: Calamity | undefined): voi
       }
     }
     if (r0 < 0) return;
+    // 本地分支 modern-pace 第三十二轮:起疫那城进了电气时代 —— 现代传染病:少起(MODERN_KEEP),起了就是多点暴发的那种
+    const er0 = eraNowAt(sim, r0);
+    if (er0 >= 6 && keyed(base, k, 2, U_MODERN) >= MODERN_KEEP) return;
     const sail = !!pm.port[r0] && sailsOcean(pm, pm.polities[owner[r0]], t);
     // 「天灾」多 / 很多:大瘟疫的几率是 CalamityRates.great(官方的 GREAT_ODDS 时),这个世界调过 GREAT_ODDS 的跟着按比例变
     // (没调过时 GREAT_ODDS ÷ 官方值 = 1,和原来一样)
     const great = rate ? rate.great * (GREAT_ODDS / PLAGUE_KNOBS.values.GREAT_ODDS) : GREAT_ODDS;
-    const ob: Outbreak = { k, t0: t, great: sail && keyed(base, k, 1, U_GREAT) < great, level: 0, hit: new Uint8Array(R), front: [] };
+    const ob: Outbreak = er0 >= 6
+      ? { k, t0: t, great: false, level: 0, hit: new Uint8Array(R), front: [], modern: er0 >= 7 ? 2 : 4 }
+      : { k, t0: t, great: sail && keyed(base, k, 1, U_GREAT) < great, level: 0, hit: new Uint8Array(R), front: [] };
     pl.now = ob;
     pl.last = t;
     infect(ob, [r0], t);
     next(ob, 0);
   });
+
+  /** 这一年有主的州一共几个(同一年里只数一次) */
+  let ownT = NaN;
+  let ownN = 0;
+  const ownedNow = (t: number): number => {
+    if (t !== ownT) {
+      ownT = t;
+      ownN = 0;
+      for (let j = 0; j < R; j++) if (owner[j] >= 0) ownN++;
+    }
+    return ownN;
+  };
+  /** 本地分支 modern-pace 第三十二轮:这一场现代传染病里国家 q 关没关口岸(进了电气时代的才会关;按国家各掷一次,机会按国都的时代) */
+  const closedOf = (ob: Outbreak, q: number, t: number): boolean => {
+    const Q = pm.polities[q];
+    if (!Q || Q.ended !== undefined) return false;
+    const er = eraNowAt(sim, pm.settlements[capitalAt(Q, t)]?.region ?? -1);
+    if (er < 6) return false;
+    // 占了天下九成以上的(世界政府)没有"国际"可关
+    if (pm.size[q] >= 0.9 * ownedNow(t)) return false;
+    return keyed4(base, ob.k, pm.ptag[q], 0, U_CLOSE) < CLOSE_P[Math.min(2, Math.floor(er) - 6)];
+  };
 
   /** 全球大疫这一场躲过去的州(闭门自守、隔绝往来;按州各掷一次,PAN_SPARE 的几率) */
   const spared = (ob: Outbreak, j: number): boolean => keyed4(base, ob.k, reg.seat[j], 0, U_PAN_SPARE) < PAN_SPARE;
@@ -392,7 +445,9 @@ function hook(sim: CivSim, pl: PlagueModel, calamity: Calamity | undefined): voi
       const kind = reg.adjKind[e];
       if (kind === AdjKind.SeaRoute && (!sail || !pm.port[j])) continue;
       if (cityNow(j, t) < 0) continue;
-      if (keyed4(base, ob.k, reg.seat[r], reg.seat[j], U_SPREAD) >= vir * (KIND[kind] ?? 1) * dense) continue;
+      // 第三十二轮:现代传染病,关了口岸的国家从别国陆上传进来打折
+      const bf = ob.modern !== undefined && owner[j] >= 0 && owner[j] !== p && closedOf(ob, owner[j], t) ? CLOSE_LAND : 1;
+      if (keyed4(base, ob.k, reg.seat[r], reg.seat[j], U_SPREAD) >= vir * (KIND[kind] ?? 1) * dense * bf) continue;
       ob.hit[j] = 1;
       out.push(j);
     }
@@ -429,6 +484,30 @@ function hook(sim: CivSim, pl: PlagueModel, calamity: Calamity | undefined): voi
     } else {
       const vir = ob.great ? GREAT_SPREAD * GREAT_DECAY ** g : SPREAD * (ob.level ? IV_SPREAD[ob.level] : 1) * DECAY ** g;
       for (const r of ob.front) spreadFrom(ob, r, vir, t, add);
+      if (ob.modern !== undefined) {
+        // 第一年:消息传开,决定闭关的国家关闭口岸(各记一条)
+        if (g === 1) {
+          for (const Q of pm.polities) {
+            if (Q.ended !== undefined || pm.size[Q.id] <= 0 || !closedOf(ob, Q.id, t)) continue;
+            const sid = capitalAt(Q, t);
+            sim.record('quarantine', { a: Q.id, b: -1, region: pm.settlements[sid]?.region ?? -1, settlement: sid, war: ob.k });
+          }
+        }
+        // 前两年:航空网络 —— 各地百万人以上、进了电气时代的大城按人口有机会直接染上(关了口岸的打折)
+        if (g <= 2) {
+          for (let j = 0; j < R; j++) {
+            if (ob.hit[j] || owner[j] < 0 || eraNowAt(sim, j) < 6) continue;
+            const sid = cityNow(j, t);
+            if (sid < 0) continue;
+            const pop = populationAt(pm.settlements[sid], t);
+            if (pop < AIR_MIN) continue;
+            const odds = AIR_P * Math.min(1, pop / AIR_REF) * (closedOf(ob, owner[j], t) ? CLOSE_AIR : 1);
+            if (keyed4(base, ob.k, reg.seat[j], 0, U_AIR + 16 * g) >= odds) continue;
+            ob.hit[j] = 1;
+            add.push(j);
+          }
+        }
+      }
     }
     add.sort((a, b) => a - b);
     if (add.length) infect(ob, add, t);
@@ -468,9 +547,9 @@ function hook(sim: CivSim, pl: PlagueModel, calamity: Calamity | undefined): voi
 }
 
 /** 一场瘟疫最多传几年 */
-function maxYears(K: PlagueKnobs, ob: { great: boolean; pan?: Year }): number {
+function maxYears(K: PlagueKnobs, ob: { great: boolean; pan?: Year; modern?: number }): number {
   const { PAN_YEARS, GREAT_YEARS, MAX_YEARS } = K;
-  return ob.pan !== undefined ? PAN_YEARS : ob.great ? GREAT_YEARS : MAX_YEARS;
+  return ob.pan !== undefined ? PAN_YEARS : ob.modern !== undefined ? ob.modern : ob.great ? GREAT_YEARS : MAX_YEARS;
 }
 
 /**
@@ -524,7 +603,9 @@ export function resumePlague(sim: CivSim, _world: World, civ: Civ, list: readonl
   hook(sim, pl, civ.calamity);
   if (last >= 0 && t0 > -Infinity) {
     pl.last = t0;
-    const great = pan === undefined && last < PLAGUE_IV && A.find((e) => e.kind === 'plague' && e.war === last)?.cause === 'great';
+    const first = pan === undefined && last < PLAGUE_IV ? A.find((e) => e.kind === 'plague' && e.war === last) : undefined;
+    const great = first?.cause === 'great';
+    const modern = first?.cause === 'modern' ? (first.n ?? 5) : undefined;
     // 作者下的那一场:轻重照那条干预
     const v = pan === undefined && last >= PLAGUE_IV ? list[last - PLAGUE_IV] : undefined;
     const level = pan !== undefined ? panLevel : v?.kind === 'disaster' ? v.level : last >= PLAGUE_IV ? 2 : 0;
@@ -551,8 +632,8 @@ export function resumePlague(sim: CivSim, _world: World, civ: Civ, list: readonl
       }
     }
     const fr = [...front].sort((a, b) => a - b);
-    if (fr.length && g < maxYears(K, { great, pan })) {
-      pl.now = { k: last, t0, great, level, ...(pan !== undefined ? { pan } : {}), hit, front: fr };
+    if (fr.length && g < maxYears(K, { great, pan, modern })) {
+      pl.now = { k: last, t0, great, level, ...(pan !== undefined ? { pan } : {}), ...(modern !== undefined ? { modern } : {}), hit, front: fr };
       sim.schedule(t0 + g + 1, Ev.PlagueStep, last, g + 1);
     }
   }

@@ -466,7 +466,7 @@ function stepYearsWith(m: PolityModel, p: Polity, k: number, b: number, dist: Fl
   const len = reg.adjLen[k] / T.refLen;
   const jitter = 0.8 + 0.4 * keyed(m.base, m.ptag[p.id], reg.seat[b], 4);
   return (
-    (m.years * len * (m.biomeF[bi] * T.fx.state[bi]) * Math.sqrt(T.poverty[b]) * cross * mod * culture * fexp(d / m.reach) * jitter) /
+    (m.years * len * (m.biomeF[bi] * T.fx.state[bi]) * Math.sqrt(T.poverty[b]) * cross * mod * culture * fexp(d / (m.reach * (1 + MODERN_REACH * modernSteps(p, t)))) * jitter) /
     p.expansionism
   );
 }
@@ -598,7 +598,7 @@ function policyWidens(m: PolityModel, pid: number, t: Year): LeaningEffect | nul
  * 扩张算账:国家 p 在 t 这一刻值不值得去州 b(见 WORTH)。dist = 离国都的路程表,cb = 州 b 的民族,owner = 此刻各州的国家。
  * 由当时在位的君主定:扩张高的不太计较,扩张低的只要富庶、离国都近的地方,重商高的看重沿海、大河、港口
  */
-function wants(m: PolityModel, owner: Int16Array, p: Polity, b: number, dist: Float32Array, cb: number, e: LeaningEffect): boolean {
+function wants(m: PolityModel, owner: Int16Array, p: Polity, b: number, dist: Float32Array, cb: number, e: LeaningEffect, t: Year): boolean {
   const { NOMAD_PREFER, AVOID, HIGH, PREFER, PORT_VALUE, RIVER_VALUE, WORTH_REACH, WORTH_FOREIGN, ENCLAVE, HIGH_COST, HIGH_SCALE, WORTH } = m.k;
   const T = m.terrain;
   const reg = T.regions;
@@ -639,11 +639,41 @@ function wants(m: PolityModel, owner: Int16Array, p: Polity, b: number, dist: Fl
     n++;
     if (owner[reg.adj[k]] === p.id) mine++;
   }
-  let cost = fexp(d / WORTH_REACH) * (cb === p.culture ? 1 : WORTH_FOREIGN) * (1 - (ENCLAVE * mine) / Math.max(1, n));
+  const steps = modernSteps(p, t);
+  let cost = fexp(d / (WORTH_REACH * (1 + MODERN_REACH * steps))) * (cb === p.culture ? 1 : WORTH_FOREIGN) * (1 - (ENCLAVE * mine) / Math.max(1, n));
   // 高山难治(山地民族不算)
   if (p.kind !== 'highland') cost *= 1 + Math.max(0, reg.elevation[b] - HIGH_COST) / HIGH_SCALE;
   const coast = T.coastal[b] === 1 || T.river[b] === 1 || m.port[b] === 1;
-  return value >= WORTH * cost * (coast ? e.coast : e.worth) * m.worthMul;
+  // 本地分支 modern-pace:国都进了工业、电气、信息时代,每到一档值 × (1 + MODERN_WORTH × 档数)(上面的路程也按 MODERN_REACH 放远)
+  return value * (1 + MODERN_WORTH * steps) >= WORTH * cost * (coast ? e.coast : e.worth) * m.worthMul;
+}
+
+/** 本地分支 modern-pace:近现代扩张算账的门槛每档降多少(见 wants);从第几个时代(工业 = 5)算起,最多几档 */
+const MODERN_WORTH = 1.5;
+/** 本地分支 modern-pace:近现代(铁路、电报、汽车)每档把"离国都远"放宽多少:扩张算账和走过去的年数里的路程 ÷ (1 + MODERN_REACH × 档数) */
+const MODERN_REACH = 1;
+/** 本地分支 modern-pace:国家 p 在 t 这一刻进了几档近现代(Polity.modern 里不晚于 t 的几个) */
+export function modernSteps(p: Pick<Polity, 'modern'>, t: Year): number {
+  let n = 0;
+  if (p.modern) for (const y of p.modern) if (y <= t) n++;
+  return n;
+}
+export const MODERN_FROM = 5;
+export const MODERN_STEPS = 3;
+
+/**
+ * 本地分支 modern-pace:国家 pid 国都所在州此刻的时代是 era(development.ts 每 20 年调一次):
+ * 第一次到工业、电气、信息的,记进 Polity.modern,从现有国土往外重新预约(门槛降了,原来不值得去的地方有的值得去了)
+ */
+export function grantModern(sim: CivSim, m: PolityModel, pid: number, era: number): void {
+  const p = m.polities[pid];
+  if (p.ended !== undefined) return;
+  const want = Math.min(MODERN_STEPS, Math.max(0, Math.floor(era) - MODERN_FROM + 1));
+  const have = p.modern?.length ?? 0;
+  if (want <= have) return;
+  const list = (p.modern ??= []);
+  while (list.length < want) list.push(sim.now);
+  respread(sim, m, pid);
 }
 
 /**
@@ -654,8 +684,8 @@ function reachYears(m: PolityModel, sim: CivSim, p: Polity, k: number, b: number
   const dist = distFor(m, p.id, sim.now);
   const cb = sim.owners[Layer.Culture][b];
   const owner = sim.owners[Layer.Polity];
-  if (!wants(m, owner, p, b, dist, cb, effOf(m, p.id, sim.now))) return Infinity;
-  if (prev && wants(m, owner, p, b, dist, cb, prev)) return Infinity;
+  if (!wants(m, owner, p, b, dist, cb, effOf(m, p.id, sim.now), sim.now)) return Infinity;
+  if (prev && wants(m, owner, p, b, dist, cb, prev, sim.now)) return Infinity;
   return stepYearsWith(m, p, k, b, dist, cb, sim.now);
 }
 
@@ -1514,9 +1544,9 @@ export function resumePolities(sim: CivSim, world: World, civ: Civ, iv?: Interve
     if (lastLog[j] > i || polity[j] >= 0) return;
     // 扩张算账:当时在位的君主、当时的四邻(po 是那一刻的归属),和推演时一样
     const dist = distAt(pid, y);
-    if (!wants(m, po, m.polities[pid], j, dist, cu[j], effOf(m, pid, y))) return;
+    if (!wants(m, po, m.polities[pid], j, dist, cu[j], effOf(m, pid, y), y)) return;
     // 新君即位时重新预约的:上一位就肯去的不重复预约(见 reachYears)
-    if (prev && wants(m, po, m.polities[pid], j, dist, cu[j], prev)) return;
+    if (prev && wants(m, po, m.polities[pid], j, dist, cu[j], prev, y)) return;
     const dt = stepYearsWith(m, m.polities[pid], k, j, dist, cu[j], y);
     if (dt < Infinity && quantize(y + dt) > now) pend.push({ t: y + dt, j, pid });
   };
@@ -1555,6 +1585,8 @@ export function resumePolities(sim: CivSim, world: World, civ: Civ, iv?: Interve
     // 这国自己能远洋的那一刻(发展度那一刻,见 grantSail;那时它一定还在)。立国就带着的(分裂时从母国带来)在同一刻立国的日志之前重放,
     // 那时它还没有州,什么也不做 —— 和推演里一样(立国时离国都的路程表已经按能远洋算,见 addPolity)
     if (p.sail !== undefined && p.sail <= now && p.sail < m.sailFrom) ends.push({ t: p.sail, pid: p.id });
+    // 本地分支 modern-pace:国都进工业、电气、信息的那一刻(见 grantModern;同一刻记了几档的只重放一次)
+    if (p.modern) for (let q = 0; q < p.modern.length; q++) if (p.modern[q] <= now && (q === 0 || p.modern[q] !== p.modern[q - 1])) ends.push({ t: p.modern[q], pid: p.id });
   }
   ends.sort((a, b) => a.t - b.t);
   let ei = 0;

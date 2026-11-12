@@ -340,6 +340,7 @@ export type InterventionInfo = (
   | { kind: 'boost'; a: string; from: number; mul?: 3 | 10; until?: number; regions?: string[] }
   | { kind: 'trek'; folk: string; from: number; region?: string; to?: string; reach?: 'near' | 'far'; dir?: 'east' | 'south' | 'west' | 'north' }
   | { kind: 'stay'; folk: string; from: number; until?: number }
+  | { kind: 'moonsite'; from: number; lon: number; lat: number }
   | {
       kind: 'policy';
       a: string;

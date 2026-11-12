@@ -51,7 +51,8 @@ import { takeFileTrouble, takeOpenNote } from '../openNote';
 import { withFileFlow } from '../worldFileLazy';
 import { resetCharacterUi } from '../characterStore';
 import { clearSelection, pausePlayback, setCivTime, takeAutoplay } from '../civView';
-import { clearEdits, getEdits, setEdits, setMapSum } from '../editsStore';
+import { clearEdits, getEdits, setEdits, setMapSum, setSystemSpec, takeCarriedSystem } from '../editsStore';
+import { planetSeed } from '../../gen/civ/story/systemText';
 import { resetExtend } from '../extendStore';
 import { askSaveAsNew, closeSaveAsNew } from '../FrozenWorld';
 import { setPolityPick } from '../Interventions';
@@ -453,7 +454,12 @@ export function useWorldLoad(deps: WorldLoadDeps) {
       dropExtendUndo();
       clearToast('extend-done');
       setPolityPick(null);
+      // 本地分支 modern-pace:新建世界(草稿,不是打开存档 / 链接 / 文件)同一颗种子重生成地图:编辑过的恒星系留着
+      // 选了别的行星当母星(种子跟着换):带过来的那份
+      const carriedSys = !t.from ? takeCarriedSystem() : null;
+      const keepSys = carriedSys ?? (!t.from && t.params.seed === planetSeed() ? getEdits().system : undefined);
       clearEdits();
+      if (keepSys) setSystemSpec(keepSys);
       clearSelection();
       if (getPeople().polity !== null) setPeople({ polity: null });
       // 正在进行 / 已算好的回放都属于旧世界,一起作废
@@ -601,7 +607,9 @@ export function useWorldLoad(deps: WorldLoadDeps) {
     // 同一张图换一份修改(打开同种子的另一份存档、分享链接)也算换了世界:正在填的标记、选中的标记作废
     resetMarkUi();
     resetCharacterUi();
-    setEdits(edits);
+    // 本地分支 modern-pace:草稿重生成完,套上的修改里没有恒星系、手上有的:留着(生成期间改的不被盖掉)
+    const sysNow = getEdits().system;
+    setEdits(!t.from && !edits.system && sysNow ? { ...edits, system: sysNow } : edits);
     // 还没存着的旧版本世界(分享链接、旧网址、存不进浏览器的文件):原来那一份跟着(看原样;改了存进来时原样留着)
     const original = t.from === 'url' ? (t.gen !== undefined ? plainSave(world.params, t.gen) : null) : t.from === 'link' || t.from === 'file' ? (t.save ?? null) : null;
     // 读存下的内容打开的:算它的那一版。比现在旧的是照原样打开的旧世界,存档照旧记建它的那一版

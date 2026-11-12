@@ -37,7 +37,7 @@ const MAX_RUINED = 2;
 
 const MOODS = ['充裕', '尚可', '拮据', '国用不足'] as const;
 /** 天灾的名字(quake 照震中那州再分地震、大水、大旱,见 calamity.ts 的 quakeWord) */
-const CAUSE = { famine: '饥荒', plague: '瘟疫', slump: '疫后凋敝' } as const;
+const CAUSE = { famine: '饥荒', plague: '瘟疫', slump: '疫后凋敝', nuke: '核打击', winter: '核冬天饥荒' } as const;
 
 /** 有才列的那几行的名目(也是排在四行底子后面的那几行) */
 export type ReignEventKind = '国号' | '迁都' | '城' | '时代' | '首创' | '物产' | '天灾';
@@ -92,7 +92,7 @@ export interface ReignRecord {
 /** 在位的年数:"不到 1 年""29 年" */
 const yrs = (v: number) => (v < 1 ? '不到 1 年' : `${Math.round(v)} 年`);
 /** 人口的字,不带"约":"1484 万""3200 人" */
-const popText = (pop: number) => populationLabel(pop).replace(/^约 /, '').replace(/万人$/, '万');
+const popText = (pop: number) => populationLabel(pop).replace(/^约 /, '').replace(/(万|亿)人$/, '$1');
 /** 句子里的人口:"约 1484 万人""约 3200 人" */
 const popPeople = (pop: number) => {
   const t = popText(pop);

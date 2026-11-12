@@ -601,7 +601,7 @@ const TRADE_EVENT_KINDS = kinds<TradeEvent['kind']>({ open: 1, break: 1, reopen:
 /** 史事的种类:annals.ts 的表就是全的(编译时核对过) */
 const ANNAL_KIND_NAMES = new Set(Object.keys(ANNAL_KINDS));
 /** 编年史条目的种类:史事的种类,再加这几种 */
-const ENTRY_KIND_NAMES = new Set([...ANNAL_KIND_NAMES, ...kinds<Exclude<EntryKind, AnnalKind>>({ reign: 1, faith: 1, era: 1, thought: 1, revolution: 1, coup: 1, plugin: 1 })]);
+const ENTRY_KIND_NAMES = new Set([...ANNAL_KIND_NAMES, ...kinds<Exclude<EntryKind, AnnalKind>>({ reign: 1, faith: 1, era: 1, thought: 1, revolution: 1, coup: 1, plugin: 1, rename: 1, science: 1, debris: 1 })]);
 /** 河、地名路径上的点:都在地图上,最多跨出去一圈(经线那边接回来的)。太离谱的点按长度细分时分不完 */
 function pathPointsOk(a: ArrayLike<number>, step: number, at: string): void {
   for (let i = 0; i + 1 < a.length; i += step) {
@@ -1109,6 +1109,7 @@ function checkDevelopment(raw: unknown, c: Counts): void {
     for (const k of ['stock', 'availNow']) typed(s[k], Float64Array, `历史的 development.state.${k}`, R * RESOURCE_COUNT);
     typed(s.depleted, Uint8Array, '历史的 development.state.depleted', R * RESOURCE_COUNT);
     if (s.resFrom !== undefined) typed(s.resFrom, Float64Array, '历史的 development.state.resFrom', R * RESOURCE_COUNT);
+    if (s.futFrom !== undefined) typed(s.futFrom, Float64Array, '历史的 development.state.futFrom', R);
     list(s.polityEra, '历史的 development.state.polityEra');
     list(s.military, '历史的 development.state.military');
   }

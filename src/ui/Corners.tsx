@@ -31,6 +31,8 @@ import { toggleRelief } from './terrain3dStore';
 import { useAiOn } from '../ai/client';
 import { ToolsButton } from './plugins/entry';
 import './book.css';
+import { homeworldOf } from '../gen/civ/homeworld';
+import { enterSystemView, exitSystemView, setMoonGlobe, setMoonView, setNight, toggleSpacePanel, useSpaceUi, useUnlocks } from './spaceStore';
 
 // 左上的旧版 / 测试版标记单独一个文件(我的世界页也用,不带上这里的地图按钮)
 export { OldSiteBadge } from './OldSiteBadge';
@@ -60,6 +62,7 @@ export function MapBar({ layers, exp, civ }: { layers: LayerPopoverProps; exp: E
             {f.name}
           </button>
         ))}
+        <SpaceButton civ={civ} />
         <span className="seg-div" aria-hidden="true" />
         <LayerPopover {...layers} trigger="seg" />
       </div>
@@ -70,6 +73,78 @@ export function MapBar({ layers, exp, civ }: { layers: LayerPopoverProps; exp: E
       </button>
       <AssistantButton disabled={!civ} />
     </div>
+  );
+}
+
+/** 本地分支 modern-pace:「航天」(思潮后面):开 / 关航天面板;第一颗人造卫星上天那年起才有 */
+function SpaceButton({ civ }: { civ: Civ | null }) {
+  const unl = useUnlocks(civ);
+  const { panel } = useSpaceUi();
+  if (unl.all || !unl.space) return null;
+  return (
+    <button className={`seg-btn${panel ? ' on' : ''}`} data-act="space" aria-pressed={panel} data-tip="航天" onClick={toggleSpacePanel}>
+      航天
+    </button>
+  );
+}
+
+/** 本地分支 modern-pace:右下「月球」:主图换成月面图 / 换回来;第一次绕月探测以后才有 */
+function MoonButton({ civ }: { civ: Civ | null }) {
+  const unl = useUnlocks(civ);
+  const { moon, system } = useSpaceUi();
+  if (unl.all || !unl.moon) return null;
+  // 第四十九轮:点"月球" = 进恒星系空间(和地球仪往外缩同一个),镜头盯着月球;月面图从那里的卡片进
+  const on = moon || system?.focus === 'moon';
+  return (
+    <button
+      className={`glass mc-btn mc-globe mc-moon${on ? ' on' : ''}`}
+      data-act="moon"
+      aria-pressed={on}
+      onClick={() => {
+        if (on) {
+          setMoonView(false);
+          exitSystemView();
+          return;
+        }
+        enterSystemView({ lon: 0, lat: 0, cx: window.innerWidth * 0.55, cy: window.innerHeight * 0.45, R: 110, focus: 'moon' });
+      }}
+      title={on ? `回到${civ ? homeworldOf(civ) : '母星'}` : '看月球(恒星系空间里;卡片上点"月面图"选着陆点)'}
+    >
+      <Icon name="globe" size={18} />
+      <span>月球</span>
+    </button>
+  );
+}
+
+/** 第五十一轮:夜景开关(有了电力以后才有) */
+function NightButton({ civ }: { civ: Civ | null }) {
+  const unl = useUnlocks(civ);
+  const { night } = useSpaceUi();
+  if (unl.all || !unl.night) return null;
+  return (
+    <button className={`glass mc-btn mc-globe${night ? ' on' : ''}`} data-act="night" aria-pressed={night} onClick={() => setNight(!night)} title={night ? '回到白天' : '夜景:城市灯光,发达、人多的地方亮'}>
+      <Icon name="globe" size={18} />
+      <span>{night ? '白天' : '夜景'}</span>
+    </button>
+  );
+}
+
+/** "地球 / 平面"切换;月球视图开着时切的是月球的球形 / 平面(本地分支 modern-pace) */
+function GlobeToggle({ globeOn, onToggleGlobe, civ }: { globeOn: boolean; onToggleGlobe: () => void; civ: Civ | null }) {
+  const ui = useSpaceUi();
+  const unl = useUnlocks(civ);
+  if (ui.moon && !unl.all && unl.moon)
+    return (
+      <button className="glass mc-btn mc-globe globe-toggle" data-act="moon-globe" onClick={() => setMoonGlobe(!ui.moonGlobe)} title={ui.moonGlobe ? '月球换成平面图' : '月球画成可以转动的球'}>
+        <Icon name={ui.moonGlobe ? 'map' : 'globe'} size={18} />
+        <span>{ui.moonGlobe ? '平面' : '球形'}</span>
+      </button>
+    );
+  return (
+    <button className="glass mc-btn mc-globe globe-toggle" data-act="globe" onClick={onToggleGlobe} title={globeOn ? '回到平面地图' : '显示成可以转动的地球仪'}>
+      <Icon name={globeOn ? 'map' : 'globe'} size={18} />
+      <span>{globeOn ? '平面' : '地球'}</span>
+    </button>
   );
 }
 
@@ -217,7 +292,10 @@ export function MapControls({
   director,
   relief,
   tools,
+  civ = null,
 }: {
+  /** 本地分支 modern-pace:「月球」按钮看它解没解锁 */
+  civ?: Civ | null;
   globeOn: boolean;
   onToggleGlobe: () => void;
   onZoom: (factor: number) => void;
@@ -252,10 +330,9 @@ export function MapControls({
         </button>
       )}
       {tools && <ToolsButton />}
-      <button className="glass mc-btn mc-globe globe-toggle" data-act="globe" onClick={onToggleGlobe} title={globeOn ? '回到平面地图' : '显示成可以转动的地球仪'}>
-        <Icon name={globeOn ? 'map' : 'globe'} size={18} />
-        <span>{globeOn ? '平面' : '地球'}</span>
-      </button>
+      <NightButton civ={civ} />
+      <MoonButton civ={civ} />
+      <GlobeToggle globeOn={globeOn} onToggleGlobe={onToggleGlobe} civ={civ} />
       {zoom && (
         <div className="glass mc-zooms">
           <button className="mc-btn mc-zoom" data-act="zoom-in" onClick={() => onZoom(1.5)} aria-label="放大" data-tip="放大" data-tip-key="zoomIn" data-tip-side="left">

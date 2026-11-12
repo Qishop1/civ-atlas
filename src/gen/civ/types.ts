@@ -61,6 +61,10 @@ export interface Regions {
    * 航线只在各州的出海口(区内挨着能通航的海、离治所最近的陆地块)之间连;推演里走过的海峡、航线照这两头画出来(routes.ts 的 usedLanes)
    */
   adjCoast: Int32Array;
+  /** 本地分支 modern-pace 第二十七轮:各州治所的纬度(度;北正南负)。旧存档、旧数据没有 = 不给(编年史选址退回老办法) */
+  lat?: Float32Array;
+  /** 本地分支 modern-pace 第三十六轮:各州治所的经度(度;东正西负)。旧数据没有 = 不给 */
+  lon?: Float32Array;
   /** 州名(按占据它的民族的语感起名;没人住的州为空串,界面上显示"第 N 州") */
   name?: string[];
   /**
@@ -211,7 +215,7 @@ export interface Settlement {
    * 全球大疫(pandemic.ts):染疫记 plague、疫后凋敝里"疫气复作、流亡"记 slump,都带 until = 那场的凋敝结束那年:
    * 无人收拾,凋敝结束以前不长回来,之后照常按 SACK_RECOVER 淡去(growth.ts 的 populationAt);染疫的那条另带 pan = 第几场瘟疫(史事 pandemic 的 war 列)
    */
-  sacks?: { year: Year; loss: number; cause?: 'famine' | 'plague' | 'quake' | 'slump'; from?: number; until?: Year; pan?: number }[];
+  sacks?: { year: Year; loss: number; cause?: 'famine' | 'plague' | 'quake' | 'slump' | 'nuke' | 'winter'; from?: number; until?: Year; pan?: number }[];
   /**
    * 阶段 3 城市兴衰:这座城是在哪座被毁的城(Settlement id)的故址上重建的(同一州、同一地块)。
    * 同族重建沿用旧名;换了民族的另起新名。不是重建的 = 不给
@@ -260,6 +264,19 @@ export interface Polity {
    * 从能远洋的国家分出去、复国的,立国那一刻。海洋国家从来就能,不给;还不能的不给。见 polities.ts 的 sailsOcean
    */
   sail?: Year;
+  /**
+   * 本地分支 modern-pace:国都所在州的时代第一次到工业、电气、信息的那几刻(development.ts 每 20 年看一次;一步跨几档的同一刻记几次)。
+   * 到了一档,扩张算账的门槛就再降一截(polities.ts 的 MODERN_WORTH):近现代的国家把荒漠、高山、海岛也占下来。没到的不给
+   */
+  modern?: Year[];
+  /** 本地分支 modern-pace:从近现代国家分出去、独立的,立国那一刻起国号就用近现代的说法(只管显示,不改推演;没有 = 不给) */
+  modernName?: Year;
+  /** 本地分支 modern-pace 第二十六轮:成了地球联邦的那一刻(国号、国名词根从这一刻起是"地球联邦";diplomacy.ts) */
+  federation?: Year;
+  /** 本地分支 modern-pace 第六十三轮:成立星球联邦时给母星起的名字(联邦叫"某某联邦";homeworld.ts)。没有 = 不给 */
+  homeworld?: string;
+  /** 本地分支 modern-pace:首次核试验的那一刻(国都那州有了核武器;development.ts 每 20 年看一次)。没有 = 不给 */
+  nuke?: Year;
   /**
    * 阶段 3 分合(politics.ts):从哪国分出来的(分裂 / 独立、复国时起兵反抗的那一国)。
    * 分出来的国家没有"立国"史事,只有一条 split(a = 本国,b = parent);立国就不给
@@ -463,6 +480,11 @@ export type AnnalKind =
   | 'marry'
   | 'pandemic'
   | 'desolate'
+  | 'nuke'
+  | 'federation'
+  | 'quarantine'
+  | 'tower'
+  | 'orbit'
   | 'treaty'
   | 'breach'
   | 'expire'
@@ -492,7 +514,7 @@ export type AnnalKind =
  *   revolution:议立宪 / 废君谈崩、起兵的人打不进国都,据地自立为共和国(史事 split 的 cause,reform.ts;紧跟在那条 council 后面);
  *   surrender 强国打下国都,余下的州一并归降、亡国(破都纳降,wars.ts;fall 的 cause)
  */
-export type AnnalCause = 'expand' | 'claim' | 'chaos' | 'prey' | 'resource' | 'betray' | 'punish' | 'ally' | 'rescue' | 'lapse' | 'abandon' | 'vassal' | 'quell' | 'collapse' | 'great' | 'quake' | 'warlord' | 'broke' | 'heir' | 'slain' | 'captured' | 'withdrew' | 'pandemic' | 'breach' | 'peace' | 'renew' | 'deposed' | 'fled' | 'decree' | 'divert' | 'unrest' | 'plagued' | 'minor' | 'regent' | 'plunder' | 'trek' | 'spring' | 'revolution' | 'surrender';
+export type AnnalCause = 'expand' | 'claim' | 'chaos' | 'prey' | 'resource' | 'betray' | 'punish' | 'ally' | 'rescue' | 'lapse' | 'abandon' | 'vassal' | 'quell' | 'collapse' | 'great' | 'quake' | 'warlord' | 'broke' | 'heir' | 'slain' | 'captured' | 'withdrew' | 'pandemic' | 'breach' | 'peace' | 'renew' | 'deposed' | 'fled' | 'decree' | 'divert' | 'unrest' | 'plagued' | 'minor' | 'regent' | 'plunder' | 'trek' | 'spring' | 'revolution' | 'surrender' | 'bloc' | 'pariah' | 'federation' | 'referendum' | 'modern';
 
 /**
  * 一条史事(阶段 3):推演里各事件处理函数用 CivSim.record 往 Civ.annals 里记,编年史(界面上的事件列表)只读它。
@@ -508,6 +530,8 @@ export interface Annal {
   war: number;
   /** 战役(battle)才有:攻方从哪种边打过去(AdjKind:平地、跨河、翻山、海峡、航线) */
   via?: AdjKind;
+  /** 本地分支 modern-pace:战役、攻占才有:[攻方编制, 守方编制, 攻方出了几个(1–3)](编制编号见 oob.ts) */
+  oob?: number[];
   /** 宣战(war)为什么打、盟约(unally)怎么断的(见 AnnalCause);自立(defect)的 betray = 宗主先动的兵;合并(merge)的 vassal = 藩属纳土归附 */
   cause?: AnnalCause;
   /**
@@ -535,7 +559,7 @@ export interface Annal {
 }
 
 /** Annal 里可有可无的几列:官方推演登记给引擎(events.ts 的 CIV_ANNALS),记史事时照这个次序抄进去;Annal 加了新的可选列,这里跟着加 */
-export const ANNAL_EXTRAS = ['via', 'cause', 'foe', 'n', 'ps', 'by', 'opt', 'until'] as const satisfies readonly (keyof Annal)[];
+export const ANNAL_EXTRAS = ['via', 'cause', 'foe', 'n', 'ps', 'by', 'opt', 'until', 'oob'] as const satisfies readonly (keyof Annal)[];
 /** 编译期核对:Annal 的可选列都在 ANNAL_EXTRAS 里(漏了这里报错) */
 type AnnalOptional = { [K in keyof Annal]-?: undefined extends Annal[K] ? K : never }[keyof Annal];
 const ANNAL_EXTRAS_COMPLETE: [Exclude<AnnalOptional, (typeof ANNAL_EXTRAS)[number]>] extends [never] ? true : false = true;
@@ -876,6 +900,8 @@ export interface DevState {
   depleted: Uint8Array;
   /** 旧版本存的没有(当作一直有) */
   resFrom?: Float64Array;
+  /** 本地分支 modern-pace 第四十五轮:各州进未来时代的那一步(DevModel.futFrom;旧版本存的没有,按快照补) */
+  futFrom?: Float64Array;
   polityEra: number[];
   worldEra: number;
   invented: Uint8Array;

@@ -56,16 +56,17 @@
  * 每一步只读这一刻以前已经发生的事。只用加减乘除(IEEE 精确舍入)和推演里已经舍入过的人口,跨 CPU 逐位一致。
  * 随机数一律 keyed(subSeed(seed, 'civ-development'), 治所地块, …)。
  */
+import { NW_HIT, NW_HIT_MOB, NW_PEAK, NW_SLUMP, aftermaths, winterIn } from './nuclearWinter';
 import type { Civ, DevEvent, DevState, Development, Settlement, TablesState, Year } from './types';
 import type { World } from '../world';
 import { AdjKind, Layer } from './types';
-import { biomeColumn, biomeMask, biomeTagged } from '../biomes';
+import { biomeColumn, biomeHas, biomeMask, biomeTagged } from '../biomes';
 import { MAJOR_RIVER } from './habitat';
 import { capitalAt, populationAt, ruralCapacity } from './growth';
 import { BookWriter } from './fiscalBook';
-import { keyed, subSeed } from './engine/rand';
+import { keyed, keyed4, subSeed } from './engine/rand';
 import { type CivSim } from './engine/sim';
-import { grantSail, polityModelOf, type PolityModel } from './polities';
+import { grantModern, grantSail, polityModelOf, type PolityModel } from './polities';
 import { POLICY_KNOBS, focusIndex, segAt, type PolicySeg } from './policy';
 import { cultureModelOf } from './cultures';
 import { TableEngine, type TableCard } from './engine/tables';
@@ -78,6 +79,20 @@ import type { CivModule, FinishCtx } from './modules';
 import { Ev } from './events';
 import { civApi } from './api';
 import { TABLE_GROUP } from './tableGroups';
+
+/** 本地分支 modern-pace:每样发明的前置在 INVENTIONS 里的下标(inventions.ts 的 needs) */
+/** 本地分支 modern-pace:信息革命起飞:这几样发明(下标)各让本州自己长再乘多少(门电路以后研发自己加速) */
+const TAKEOFF: readonly [number, number][] = ([['计算机', 1.2], ['半导体', 1.3], ['集成电路', 1.5], ['互联网', 1.6]] as const).map(([n, k]) => [INVENTIONS.findIndex((x) => x.name === n), k]);
+/** 本地分支 modern-pace 第十六轮:核武器在发明表里的下标 */
+const NUKE_IDX = INVENTIONS.findIndex((x) => x.name === '核武器');
+/** 本地分支 modern-pace:亮全图从哪样发明起(世上第一次有了它);每年每差一档追多少 */
+const GLOBAL_IDX = INVENTIONS.findIndex((x) => x.name === '通信卫星');
+const GLOBAL_LEARN = 0.0012;
+/** 本地分支 modern-pace:被科技树卡住时停在那一档下面多少 */
+const TREE_GAP = 0.01;
+/** 本地分支 modern-pace 第九轮:未来时代卡住时停在那一档下面多少 */
+const TREE_GAP_FUTURE = 0.3;
+const NEED_IDX: readonly (readonly number[])[] = INVENTIONS.map((inv) => (inv.needs ?? []).map((n) => INVENTIONS.findIndex((x) => x.name === n)));
 
 /** 物产(下标就是 Development.resources 里的第几样) */
 export const RESOURCES = ['粮', '牲畜', '铜锡', '铁', '煤', '木材', '盐', '渔获', '石油', '稀有矿', '金银'] as const;
@@ -121,7 +136,10 @@ export const CAP_COUNT = 5;
 /** 时代(能力、时代数值的整数部分;最后一个没有上限) */
 export const ERAS = ['石器', '青铜', '铁器', '中古', '火药', '工业', '电气', '信息', '未来'] as const;
 /** 动力为 1 时,自己长过一个时代要几年(按所在的时代) */
-const ERA_YEARS: readonly number[] = [1000, 800, 700, 750, 3000, 1600, 1300, 1500, 2000];
+const ERA_YEARS: readonly number[] = [1000, 800, 700, 750, 800, 190, 140, 110, 350];
+/** 本地分支 modern-pace:邻州的时代过了这一档(火药)以后,向它学每高一档快 DIFFUSE_UP 倍 */
+const DIFFUSE_FROM = 4;
+const DIFFUSE_UP = 1.5;
 /** 能力的上限(未来时代以后不再往上记) */
 const LEVEL_MAX = 9;
 /** 快照里一档能力存成几(Uint8:LEVEL_MAX × LEVEL_SCALE ≤ 255) */
@@ -245,11 +263,16 @@ function snapAt(snaps: Uint8Array[], ys: Year[], scale: number, year: Year, out?
 /** 城、乡村的人口上限 × (POP_BASE + POP_PER × 生产能力),POP_MAX 封顶;倍数取到 1/POP_QUANT(变了才记进 Settlement.devCap) */
 const POP_BASE = 0.85;
 const POP_PER = 0.1;
-export const POP_MAX = 2;
+export const POP_MAX = 4;
+/** 本地分支 modern-pace:生产能力过了这一档(工业)以后,人口上限每档另加 POP_IND_PER 倍 */
+const POP_IND = 5;
+const POP_IND_PER = 0.55;
 const POP_QUANT = 32;
 /** 军力系数 = 1 + MIL_PER × 国都所在州的动员能力,MIL_MAX 封顶 */
 const MIL_PER = 0.12;
 const MIL_MAX = 1.6;
+/** 本地分支 modern-pace:近现代每档军力系数上限放宽多少 */
+const MIL_MODERN = 0.25;
 /** 跨时代的门槛(见文件头):本州行政能力比要进的时代低这么多以内;近年战乱(war)不超过这么多算太平;平原 = 治所海拔低于这么多米 */
 const ADMIN_GAP = 1.3;
 const WAR_CALM = 0.5;
@@ -259,8 +282,124 @@ const TOWN = 8;
 
 /** 州的生产能力 → 人口上限的倍数(取到 1/POP_QUANT) */
 export function popFactor(production: number): number {
-  const f = Math.min(POP_MAX, POP_BASE + POP_PER * Math.max(0, production));
+  const p = Math.max(0, production);
+  // 本地分支 modern-pace:工业以后(生产能力过 POP_IND)每档多 POP_IND_PER,城市化、化肥、机械化让同一片地养得起几倍的人
+  const f = Math.min(POP_MAX, POP_BASE + POP_PER * p + (p > POP_IND ? POP_IND_PER * (p - POP_IND) : 0));
   return Math.round(f * POP_QUANT) / POP_QUANT;
+}
+
+/**
+ * 本地分支 modern-pace 第十七轮:城市化 —— 生产能力过了 URBAN_FROM(工业)以后,城(不含乡村)的人口上限每档再乘 1 + URBAN_PER × 超出的档数:
+ * 工业化以后人往城里走、粮从全世界运来,城的大小不再受周边田地限制(信息时代约 ×13–19,未来约 ×25)
+ */
+const URBAN_FROM = 5;
+const URBAN_PER = 5;
+function urbanize(f: number, production: number): number {
+  return production > URBAN_FROM ? f * (1 + URBAN_PER * (production - URBAN_FROM)) : f;
+}
+
+/**
+ * 本地分支 modern-pace 第十九轮:乡村 —— 生产能力过了 URBAN_FROM 以后,乡村的上限从工业那一档的倍数起每档只涨 RURAL_GROW
+ * (比城慢得多;第十八轮让它往下降,农村少了四成,太狠,改回来)
+ */
+const RURAL_GROW = 0.4;
+function ruralize(f: number, production: number): number {
+  return production > URBAN_FROM ? popFactor(URBAN_FROM) * (1 + RURAL_GROW * (production - URBAN_FROM)) : f;
+}
+
+/**
+ * 本地分支 modern-pace 第十九轮:人口转变和农业革命 —— 州 r 此刻有了(世上已有、本州那样能力到了那一档)
+ * 现代医学:城乡上限 × MED_BOOST;合成氨(化肥):乡村 × AMMONIA_BOOST;农业机械化:乡村 × MECH_BOOST
+ */
+const MED_BOOST = 1.7;
+/** 城里的人口转变加成小一些(城本来就靠城市化在涨,再乘 1.7 最大的城会冲到七千万) */
+const MED_BOOST_CITY = 1.2;
+const AMMONIA_BOOST = 1.5;
+const MECH_BOOST = 1.2;
+const MED_IDX = INVENTIONS.findIndex((x) => x.name === '现代医学');
+const AMMONIA_IDX = INVENTIONS.findIndex((x) => x.name === '合成氨');
+const MECH_IDX = INVENTIONS.findIndex((x) => x.name === '农业机械化');
+function hasHere(d: DevModel, r: number, i: number): boolean {
+  if (i < 0 || !d.invented[i]) return false;
+  const inv = INVENTIONS[i];
+  return d.cur[r * CAP_COUNT + inv.cap] >= inv.level;
+}
+/** 城的现代加成(人口转变) */
+function cityModern(d: DevModel, r: number): number {
+  return hasHere(d, r, MED_IDX) ? MED_BOOST_CITY : 1;
+}
+/** 乡村的现代加成(人口转变 × 化肥 × 机械) */
+function ruralModern(d: DevModel, r: number): number {
+  return (hasHere(d, r, MED_IDX) ? MED_BOOST : 1) * (hasHere(d, r, AMMONIA_IDX) ? AMMONIA_BOOST : 1) * (hasHere(d, r, MECH_IDX) ? MECH_BOOST : 1);
+}
+
+/**
+ * 本地分支 modern-pace 第四十五轮:未来时代的城市化 —— 州的生产能力到了 FUT_LEVEL(未来)以后,城的上限按进未来时代以来的年数继续涨,
+ * FUT_YEARS 年涨满 1 + FUT_GROW 倍(超大城市、连成一片的城市带)。进未来的那一刻在每 20 年那一步看,记在 DevModel.futFrom(存进状态)
+ */
+const FUT_LEVEL = 8;
+const FUT_GROW = 0.8;
+const FUT_YEARS = 800;
+function cityFuture(d: DevModel, r: number, y: Year): number {
+  const f = d.futFrom[r];
+  return f <= y ? 1 + FUT_GROW * Math.min(1, (y - f) / FUT_YEARS) : 1;
+}
+
+/**
+ * 本地分支 modern-pace 第四十五轮:太空电梯进推演(原来在 story/spaceText.ts 里按推完的结果推算,推演不知道有电梯)。
+ * 条件照原来的:近现代过了两档的国家、国号到帝国一档(或地球联邦)、国都那州运输 ≥ 8.4 且生产 ≥ 8.1、世上有了空间站满 30 年;
+ * 一国一座,天下至多 TOWER_MAX 座;每 20 年那一步看。锚点:这国有城的州里离赤道最近的(沿海优先),没有就国都那州;工期 15–25 年。
+ * 记史事 tower(a = 国家,region = 锚点州,settlement = 那州的城,n = 工期)。
+ * 锚点那州的城:动工起上限按工期涨到 TOWER_CITY 倍,建成以后 TOWER_AFTER 年里再涨到 TOWER_CITY_MAX 倍(进出太空的门户、全世界的物流中心)
+ */
+const TOWER_MAX = 3;
+const TOWER_MIN = 15;
+const TOWER_SPAN = 10;
+const TOWER_CITY = 6;
+const TOWER_CITY_MAX = 15;
+const TOWER_AFTER = 150;
+const STATION_IDX = INVENTIONS.findIndex((x) => x.name === '空间站');
+/** 和 spaceText.ts 原来的一样(工期照旧) */
+const towerHash = (a: number, b: number, c = 0) => {
+  const v = Math.sin(a * 12.9898 + b * 78.233 + c * 37.719) * 43758.5453;
+  return v - Math.floor(v);
+};
+function cityTower(d: DevModel, r: number, y: Year): number {
+  let m = 1;
+  for (const t of d.towers) {
+    if (t.region !== r || t.start > y) continue;
+    const done = t.start + t.build;
+    const k = y < done ? 1 + ((TOWER_CITY - 1) * (y - t.start)) / t.build : TOWER_CITY + (TOWER_CITY_MAX - TOWER_CITY) * Math.min(1, (y - done) / TOWER_AFTER);
+    m = Math.max(m, k);
+  }
+  return m;
+}
+/** 电梯的锚点:这国有城的州里离赤道最近的(差不多纬度的沿海优先);州没有纬度的旧数据:沿海、不在苦寒之地的;都没有就国都那州 */
+function towerSite(d: DevModel, p: number, capR: number, y: Year, ownP: ArrayLike<number>): number {
+  const pm = d.pm;
+  const reg = pm.terrain.regions;
+  let best = capR;
+  let score = -Infinity;
+  for (const s of pm.settlements) {
+    if (s.region >= d.R || ownP[s.region] !== p || (s.ended !== undefined && s.ended <= y) || s.founded > y) continue;
+    const b = reg.biome[s.region];
+    const coast = d.habitat.coastDist[s.cell] === 1 ? 1 : 0;
+    const lat = reg.lat?.[s.region];
+    if (lat === undefined && (biomeHas(b, 'cold') || biomeHas(b, 'ice'))) continue;
+    const v = (lat !== undefined ? -Math.abs(lat) : 0) + coast * (lat !== undefined ? 3 : 10) + s.capacity * 1e-6 - s.id * 1e-9;
+    if (v > score) {
+      score = v;
+      best = s.region;
+    }
+  }
+  return best;
+}
+
+/** 世上第一座空间站是哪一年(发展度事件里第一条) */
+function stationYear(d: DevModel): number {
+  let y = Infinity;
+  for (const e of d.events) if (e.kind === 'invent' && e.invention === STATION_IDX && e.year < y) y = e.year;
+  return y;
 }
 
 /** 城的人口上限倍数乘上推演插件交的 city.capacity(仍取到 1/POP_QUANT:变了才记进 devCap) */
@@ -317,6 +456,10 @@ export interface DevModel {
   seenCities: number;
   /** 各州城的人口上限此刻的倍数(PolityModel.capFactor,同一份) */
   capF: Float64Array;
+  /** 本地分支 modern-pace 第四十五轮:各州进未来时代(生产能力到 FUT_LEVEL)的那一步;没进 = Infinity */
+  futFrom: Float64Array;
+  /** 本地分支 modern-pace 第四十五轮:太空电梯(国家、锚点州、动工那年、工期);接着推时从史事 tower 重建 */
+  towers: { p: number; region: number; start: Year; build: number }[];
   events: DevEvent[];
   snaps: Uint8Array[];
   avail: Uint8Array[];
@@ -386,6 +529,8 @@ function emptyDev(world: World, pm: PolityModel, seed: number, habitat: Civ['hab
     firstCity: new Int32Array(R).fill(-1),
     seenCities: 0,
     capF: new Float64Array(R).fill(popFactor(0)),
+    futFrom: new Float64Array(R).fill(Infinity),
+    towers: [],
     events: [],
     snaps: [],
     avail: [],
@@ -431,6 +576,12 @@ export function resumeDevelopment(sim: CivSim, world: World, civ: Civ): void {
     copy(d.availNow, st.availNow, RESOURCE_COUNT);
     copy(d.depleted, st.depleted, RESOURCE_COUNT);
     if (st.resFrom) copy(d.resFrom, st.resFrom, RESOURCE_COUNT);
+    if (st.futFrom) copy(d.futFrom, st.futFrom, 1);
+    // 旧版本存的没有:按快照里头一份生产能力到了 FUT_LEVEL 的那年补
+    else
+      dev.snaps.forEach((sn, k) => {
+        for (let r = 0; r < R0; r++) if (d.futFrom[r] === Infinity && sn[r * CAP_COUNT + Cap.Production] !== BAD_LEVEL && sn[r * CAP_COUNT + Cap.Production] >= FUT_LEVEL * LEVEL_SCALE) d.futFrom[r] = dev.snapYears[k];
+      });
     copy(d.found, dev.found, RESOURCE_COUNT);
     // 储量:物产按这一段的地形重新分档了的,按新旧档位之比缩放(没变的原样接上)
     const old = dev.resources;
@@ -476,6 +627,8 @@ export function resumeDevelopment(sim: CivSim, world: World, civ: Civ): void {
     d.last = Math.floor(sim.now / STEP) * STEP;
     d.annals = civ.annals.length;
   }
+  // 本地分支 modern-pace 第四十五轮:太空电梯从史事 tower 重建
+  for (const a of civ.annals) if (a.kind === 'tower') d.towers.push({ p: a.a, region: a.region, start: a.year, build: a.n ?? TOWER_MIN });
   // 归属的年份、各州第一座城:按日志、城表重建(和推演里监听记的一样)
   const log = civ.log;
   for (let i = 0; i < log.size; i++) {
@@ -512,7 +665,12 @@ function hook(sim: CivSim, d: DevModel): void {
   d.eng = devEngine(d, !!sim.influence?.has('dev.rate'));
   sim.tables.add(TABLE_GROUP.dev, d.eng);
   d.pm.capFactor = d.capF;
-  if (sim.influence?.has('city.capacity')) d.pm.cityCapOf = (r) => cityCap(d.capF[r], sim.influence!.get('city.capacity')![r]);
+  // 本地分支 modern-pace 第十七轮:城的倍数 = 乡村的倍数 × 城市化倍数(工业以后);推演插件接了 city.capacity 的再乘它
+  d.pm.cityCapOf = (r) =>
+    cityCap(
+      urbanize(d.capF[r], d.cur[r * CAP_COUNT + Cap.Production]) * cityModern(d, r) * cityFuture(d, r, sim.now) * cityTower(d, r, sim.now),
+      sim.influence?.has('city.capacity') ? sim.influence.get('city.capacity')![r] : 1,
+    );
   d.pm.military ??= [];
   // 打仗看物产(wars.ts):州里有哪几样;国家缺哪几样
   const wm = warModelOf(sim);
@@ -613,7 +771,7 @@ export function ruralTargets(d: DevModel, y: Year, cap: Float64Array, rate: Floa
     const f = d.firstCity[r];
     const first = f >= 0 ? d.pm.settlements[f] : undefined;
     if (first && y >= first.founded) {
-      cap[r] = base[r] * d.capF[r];
+      cap[r] = base[r] * ruralize(d.capF[r], d.cur[r * CAP_COUNT + Cap.Production]) * ruralModern(d, r);
       rate[r] = first.growth;
     } else cap[r] = rate[r] = 0;
   }
@@ -692,6 +850,8 @@ export function devCardsOf(knobs: KnobSet, rate = false): TableCard[] {
       RESOURCES,
       CAPS,
       ERA_YEARS,
+      DIFFUSE_FROM,
+      DIFFUSE_UP,
       LEVEL_MAX,
       LEARN,
       SAME_STATE,
@@ -839,6 +999,37 @@ function tick(sim: CivSim, d: DevModel, y: Year): void {
       focusMob[p] = mul[Cap.Mobilization];
     }
   }
+  // 本地分支 modern-pace:科技树卡住的上限 —— 前置世上还没齐的发明,它那样能力长不过它的档位(差一点点,停在门口)
+  const ceil = [LEVEL_MAX, LEVEL_MAX, LEVEL_MAX, LEVEL_MAX];
+  INVENTIONS.forEach((inv, i) => {
+    if (inv.cap >= 4 || d.invented[i] || !NEED_IDX[i].length) return;
+    for (const j of NEED_IDX[i]) {
+      if (!d.invented[j]) {
+        // 第九轮:未来时代的科技前置齐了以后还要再长一截(停得更远),不会前置一到就接连蹦出来
+        const gap = inv.level >= 8 ? TREE_GAP_FUTURE : TREE_GAP;
+        // 卡住它的前置里有同一条能力上的,上限不低于那样前置的档位(不然那样前置永远到不了,卡死)
+        let c = inv.level - gap;
+        for (const q of NEED_IDX[i]) if (!d.invented[q] && INVENTIONS[q].cap === inv.cap && INVENTIONS[q].level + TREE_GAP > c) c = INVENTIONS[q].level + TREE_GAP;
+        if (c < ceil[inv.cap]) ceil[inv.cap] = c;
+        return;
+      }
+    }
+  });
+  const ceilIn = eng.input('科顶');
+  for (let r = 0; r < R; r++) for (let c = 0; c < 4; c++) ceilIn[r * 4 + c] = ceil[c];
+  // 本地分支 modern-pace:亮全图 —— 世上有了通信卫星以后,每州向全世界最高的水平靠拢(GLOBAL_LEARN;差得越多追得越快)
+  const topIn = eng.input('世界顶');
+  const top4 = [0, 0, 0, 0];
+  for (let r = 0; r < R; r++) for (let c = 0; c < 4; c++) if (d.cur[r * CAP_COUNT + c] > top4[c]) top4[c] = d.cur[r * CAP_COUNT + c];
+  for (let r = 0; r < R; r++) for (let c = 0; c < 4; c++) topIn[r * 4 + c] = top4[c];
+  eng.input('全球化').fill(GLOBAL_IDX >= 0 && d.invented[GLOBAL_IDX] ? GLOBAL_LEARN : 0);
+  // 本地分支 modern-pace:信息革命的起飞 —— 世上已有、本州信息能力也到了那一档的(TAKEOFF),各乘一截
+  const takeIn = eng.input('起飞').fill(1);
+  for (const [i, k] of TAKEOFF) {
+    if (!d.invented[i]) continue;
+    const lvI = INVENTIONS[i].level;
+    for (let r = 0; r < R; r++) if (d.cur[r * CAP_COUNT + Cap.Information] >= lvI) takeIn[r] *= k;
+  }
   // 推一把发展(boost.ts):这一步里各州"自己长""向邻居学"的倍数,按这一步里管了几成折算。没推的州 1,什么都不变
   const boostIn = eng.input('推').fill(1);
   if (dt > 0) api.dev.boostFill?.(d.last, y, boostIn);
@@ -869,11 +1060,22 @@ function tick(sim: CivSim, d: DevModel, y: Year): void {
         if (a.b >= 1) collapseHit(sim, d.annals, a.b === 2 ? HIT_TRIBAL : HIT_COLLAPSE, R, hitAt);
         continue;
       }
+      // 第六十四轮:核冬天 —— 各州扣能力(电网、运输、行政最重),到过的最高值也削掉(技术失传)
+      if (a.kind === 'nuke' && a.n === 6) {
+        winterHit(eng, R, (a.oob?.[1] ?? 0) / 1000, d.seed);
+        continue;
+      }
       const hit = a.kind === 'conquer' ? HIT_CONQUER : a.kind === 'battle' ? HIT_BATTLE : a.kind === 'sack' ? HIT_SACK : a.kind === 'ruin' ? HIT_RUIN : null;
       if (!hit || !(a.region >= 0 && a.region < R)) continue;
       hitAt(a.region, hit);
     }
     if (panOn) pandemicHits(eng, pan!, d.last, y, R);
+    // 第六十四轮:核冬天余波里每年再往下掉一点(无人收拾)
+    const wv = winterIn(sim, d.last, y);
+    if (wv) {
+      const k = wv.sev * wv.years;
+      for (let r = 0; r < R; r++) for (let c = 0; c < 4; c++) eng.write('能力', r, c, Math.max(0, eng.value('能力', r, c) - k * NW_SLUMP[c]));
+    }
   });
   // 表的副本(别处读、存档用)
   const capT = eng.get('能力');
@@ -942,6 +1144,16 @@ function tick(sim: CivSim, d: DevModel, y: Year): void {
       d.polityEra[p] = e;
     }
   }
+  // 第六十四轮:核冬天余波里国都所在的州退回去:每退一个时代记一条 regress
+  if (winterIn(sim, d.last - STEP, y)) {
+    for (let p = 0; p < P; p++) {
+      const r = capR[p];
+      if (r < 0) continue;
+      const e = eraOf(E[r]).era;
+      const e0 = eraOf(Eprev[r]).era;
+      for (let k = e0 - 1; k >= e; k--) push({ year: y, kind: 'regress', era: k, region: r });
+    }
+  }
   // 全球大疫的凋敝里国都所在的州退回上一个时代:记一条 regress(只看凋敝里的;到过的时代 polityEra 不降,长回来不再记"始入")
   if (panOn) {
     for (let p = 0; p < P; p++) {
@@ -958,12 +1170,40 @@ function tick(sim: CivSim, d: DevModel, y: Year): void {
     }
   }
   // 发明:世上第一次有州的那样能力到了那一档(同一步里有几州都到了,记估出的那一刻最早的)
+  // 本地分支 modern-pace:有前置(needs)的,前置世上都有了才算;前置这一步才齐、早就过了那一档的,记在最后一样前置出现的那一刻(能力最高的那州)
+  const atNow = new Map<number, number>();
   INVENTIONS.forEach((inv, i) => {
     if (d.invented[i]) return;
+    const need = NEED_IDX[i];
+    for (const j of need) if (!d.invented[j]) return;
+    let at = -Infinity;
+    for (const j of need) {
+      const yj = atNow.get(j);
+      if (yj !== undefined && yj > at) at = yj;
+    }
     const f = firstCross(prev, cur, CAP_COUNT, inv.cap, inv.level);
-    if (f.r < 0) return;
+    if (f.r >= 0) {
+      d.invented[i] = 1;
+      const yr = Math.max(f.t, at);
+      atNow.set(i, yr);
+      push({ year: yr, kind: 'invent', invention: i, region: f.r });
+      return;
+    }
+    if (!need.length) return;
+    let best = -1;
+    let bv = -Infinity;
+    for (let r = 0; r < d.R; r++) {
+      const v = cur[r * CAP_COUNT + inv.cap];
+      if (v >= inv.level && v > bv) {
+        bv = v;
+        best = r;
+      }
+    }
+    if (best < 0) return;
     d.invented[i] = 1;
-    push({ year: f.t, kind: 'invent', invention: i, region: f.r });
+    const yr = at > -Infinity ? at : y;
+    atNow.set(i, yr);
+    push({ year: yr, kind: 'invent', invention: i, region: best });
   });
 
   // 物产的大事:储量多的矿这一步发现了;一样物产这一步采空、吃空了(掉到储量的两成 / 四成以下)
@@ -992,9 +1232,11 @@ function tick(sim: CivSim, d: DevModel, y: Year): void {
   for (let r = 0; r < R; r++) {
     const f = popFactor(cur[r * CAP_COUNT + Cap.Production]);
     d.capF[r] = f;
+    if (d.futFrom[r] === Infinity && cur[r * CAP_COUNT + Cap.Production] >= FUT_LEVEL) d.futFrom[r] = y;
     const s = cityIn(pm, r);
     if (!s) continue;
-    const g = capIn ? cityCap(f, capIn[r]) : f;
+    const u = urbanize(f, cur[r * CAP_COUNT + Cap.Production]) * cityModern(d, r) * cityFuture(d, r, y) * cityTower(d, r, y);
+    const g = capIn ? cityCap(u, capIn[r]) : cityCap(u, 1);
     const dc = (s.devCap ??= [s.founded, g]);
     if (dc[dc.length - 1] !== g) dc.push(y, g);
   }
@@ -1004,8 +1246,37 @@ function tick(sim: CivSim, d: DevModel, y: Year): void {
     const r = capR[p];
     if (r < 0) continue;
     const o = r * CAP_COUNT;
-    mil[p] = Math.min(MIL_MAX, 1 + MIL_PER * cur[o + Cap.Mobilization]);
     if (cur[o + Cap.Transport] >= SAIL_LEVEL) grantSail(sim, pm, p);
+    // 本地分支 modern-pace:国都进了工业以后,扩张算账的门槛按时代降(polities.ts 的 grantModern)
+    grantModern(sim, pm, p, eraLevel(cur, r));
+    // 本地分支 modern-pace 第十六轮:国都那州有了核武器的,记首次核试验(Polity.nuke + 史事 nuke,n = 0)
+    if (NUKE_IDX >= 0 && d.invented[NUKE_IDX] && pm.polities[p].nuke === undefined && pm.polities[p].ended === undefined && cur[o + Cap.Mobilization] >= INVENTIONS[NUKE_IDX].level) {
+      pm.polities[p].nuke = y;
+      const sid = capitalAt(pm.polities[p], y);
+      sim.record('nuke', { a: p, region: r, settlement: sid, n: 0 });
+    }
+    // 本地分支 modern-pace 第四十五轮:太空电梯(条件见 TOWER_MAX 那段)
+    if (d.towers.length < TOWER_MAX && STATION_IDX >= 0 && d.invented[STATION_IDX]) {
+      const q = pm.polities[p];
+      const tier = (q.titles?.filter((x) => x.year <= y).pop()?.tier ?? 0) >= 3 || (q.federation !== undefined && q.federation <= y);
+      if (
+        q.ended === undefined &&
+        (q.modern?.length ?? 0) >= 2 &&
+        tier &&
+        cur[o + Cap.Transport] >= 8.4 &&
+        cur[o + Cap.Production] >= 8.1 &&
+        !d.towers.some((t) => t.p === p) &&
+        stationYear(d) + 30 <= y
+      ) {
+        const site = towerSite(d, p, r, y, ownP);
+        const build = TOWER_MIN + Math.floor(towerHash(p, 5, 3) * (TOWER_SPAN + 1));
+        d.towers.push({ p, region: site, start: y, build });
+        sim.record('tower', { a: p, region: site, settlement: cityIn(pm, site)?.id ?? -1, n: build });
+        // 锚点那州的城当即按新倍数记(动工这一刻倍数还是 1,下一步起涨)
+      }
+    }
+    // 本地分支 modern-pace:军力系数的上限每进一档近现代放宽 MIL_MODERN(征兵制、总体战);每 20 年按这一刻定
+    mil[p] = Math.min(MIL_MAX + MIL_MODERN * (pm.polities[p].modern?.length ?? 0), 1 + MIL_PER * cur[o + Cap.Mobilization]);
   }
 
   const lastSnap = d.snapYears.length ? d.snapYears[d.snapYears.length - 1] : -Infinity;
@@ -1019,6 +1290,20 @@ function tick(sim: CivSim, d: DevModel, y: Year): void {
       if (q.t0 > lastSnap && q.t0 < y && q.t0 < start) start = q.t0;
     }
     if (start < Infinity) {
+      const s = makeSnapOf(R, prev, availPrev);
+      d.snaps.push(s.snap);
+      d.avail.push(s.avail);
+      d.snapYears.push(start);
+    }
+  }
+  // 第六十四轮:核冬天也一样 —— 开始那一刻按上一步补一份,余波里和之后 PAN_SNAP_AFTER 年每步存一份
+  {
+    let start = Infinity;
+    for (const q of aftermaths(sim)) {
+      if (q.year <= y && y <= q.until + PAN_SNAP_AFTER) panSnap = true;
+      if (q.year > lastSnap && q.year < y && q.year < start) start = q.year;
+    }
+    if (start < Infinity && !(d.snapYears.length && d.snapYears[d.snapYears.length - 1] >= start)) {
       const s = makeSnapOf(R, prev, availPrev);
       d.snaps.push(s.snap);
       d.avail.push(s.avail);
@@ -1052,6 +1337,15 @@ function makeSnapOf(R: number, cur: Float64Array, availNow: Float64Array): { sna
 
 /** 直接进下一个时代:四样能力拉到那个时代开头再往里这么多(时代的整数部分稳稳是那个时代) */
 const JUMP_INTO = 0.02;
+
+/** 本地分支 modern-pace 第九轮:州 r 此刻有没有某样发明(世上已有、本州那样能力也到了那一档;上一步算完的) */
+export function inventedHere(sim: CivSim, r: number, name: string): boolean {
+  const d = models.get(sim);
+  const i = INVENTIONS.findIndex((x) => x.name === name);
+  if (!d || i < 0 || r < 0 || r >= d.R || !d.invented[i]) return false;
+  const inv = INVENTIONS[i];
+  return d.cur[r * CAP_COUNT + inv.cap] >= inv.level;
+}
 
 /** 州 r 此刻的时代数值(上一步算完的;推演外 / 没有这一州 = −1;推一把发展的"直接进"以它为准) */
 export function eraNowAt(sim: CivSim, r: number): number {
@@ -1136,6 +1430,8 @@ export function jumpEra(sim: CivSim, regions: readonly number[], target: number,
   // 世上头一回的发明(动员不拉,只看四样)
   INVENTIONS.forEach((inv, i) => {
     if (d.invented[i] || inv.cap >= 4) return;
+    // 本地分支 modern-pace:前置没齐的不算
+    for (const j of NEED_IDX[i]) if (!d.invented[j]) return;
     const r = reach((x) => cur[x * CAP_COUNT + inv.cap], inv.level);
     if (r < 0) return;
     d.invented[i] = 1;
@@ -1165,6 +1461,22 @@ export function jumpEra(sim: CivSim, regions: readonly number[], target: number,
  * 全球大疫扣能力(算这一步、四样能力和动员算完时;只看 [a, b) 这一段):这一段里染上的州扣 PAN_HIT × 轻重,
  * 凋敝的年数每年再掉 SLUMP_DROP × 轻重;时代已比到过的最高值退了 SLUMP_ERA_MAX 的不再往下掉(保底)
  */
+/** 第六十四轮:核冬天那一刻各州扣能力、削到过的最高值(× 0.7–1.3 随机,按州的治所定) */
+function winterHit(eng: TableEngine, R: number, sev: number, base: number): void {
+  const kh = Math.pow(sev, 1.3),
+    kp = Math.pow(sev, 1.5);
+  for (let r = 0; r < R; r++) {
+    if (!(eng.value('最高', r, 0) > 0)) continue;
+    const f = 0.7 + 0.6 * keyed4(base, r, 77, 1, 9301);
+    for (let c = 0; c < 4; c++) {
+      const now = Math.max(0, eng.value('能力', r, c) - kh * f * NW_HIT[c]);
+      eng.write('能力', r, c, now);
+      eng.write('最高', r, c, Math.max(now, eng.value('最高', r, c) - kp * f * NW_PEAK[c]));
+    }
+    eng.write('动员', r, 0, Math.max(0, eng.value('动员', r) - kh * f * NW_HIT_MOB));
+  }
+}
+
 function pandemicHits(eng: TableEngine, pan: PandemicModel, a: Year, b: Year, R: number): void {
   const w = ERA_WEIGHT;
   const eraOfRow = (id: '能力' | '最高', r: number) => {
@@ -1270,6 +1582,7 @@ export function finishDevelopment(sim: CivSim, endYear: Year): Development | und
     availNow: d.availNow.slice(),
     depleted: d.depleted.slice(),
     resFrom: d.resFrom.slice(),
+    futFrom: d.futFrom.slice(),
     // 两步之间立国又亡了的国家从没记过时代、军力,数组里留了空位:补成 −1、1(和没记过一样),存档、打包读回才一模一样
     polityEra: Array.from(d.polityEra, (e) => e ?? -1),
     worldEra: d.worldEra,

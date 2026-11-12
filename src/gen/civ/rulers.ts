@@ -163,7 +163,15 @@ export function rulerTags(polities: readonly Pick<Polity, 'capital'>[], cellOf: 
 }
 
 /** 一国的君主要用到的国家字段 */
-export type ReignPolity = Pick<Polity, 'founded' | 'dynasties' | 'lineage' | 'kind' | 'prince' | 'seizes'>;
+export type ReignPolity = Pick<Polity, 'founded' | 'dynasties' | 'lineage' | 'kind' | 'prince' | 'seizes' | 'modern'>;
+
+/** 本地分支 modern-pace:即位那一刻(严格早于)国都每进一档近现代,一生最多再多活 AGE_PER_MODERN 岁(88 → 96 → 104 → 112) */
+export const AGE_PER_MODERN = 8;
+export function maxAgeFor(maxAge: number, p: Pick<Polity, 'modern'>, from: Year): number {
+  let n = 0;
+  if (p.modern) for (const t of p.modern) if (t < from) n++;
+  return maxAge + AGE_PER_MODERN * n;
+}
 
 /** 军政府那一段的执政(将军)倾向偏移:好战、开拓偏高(加在共和一系的偏移上) */
 export const JUNTA_SHIFT: Partial<RulerLeanings> = { war: 15, expand: 5, develop: -10 };
@@ -185,8 +193,10 @@ export function reignStep(
   kind: CultureKind,
   born?: Year,
   shift?: Partial<RulerLeanings>,
+  maxAge?: number,
 ): { age: number; natural: Year; leanings: RulerLeanings } {
-  const { FOUNDER_AGE, HEIR_AGE, HEIR_EXP, REIGN_MAX, REIGN_EXP, CONSUL_AGE, TERM, MAX_AGE } = knobs.get(RULERS_KNOBS);
+  const { FOUNDER_AGE, HEIR_AGE, HEIR_EXP, REIGN_MAX, REIGN_EXP, CONSUL_AGE, TERM } = knobs.get(RULERS_KNOBS);
+  const MAX_AGE = maxAge ?? knobs.get(RULERS_KNOBS).MAX_AGE;
   const R = (use: number) => keyed4(base, tag, k, use, K_RULER);
   const republic = lineage === 'republic';
   let A: number;
@@ -389,6 +399,8 @@ export function leaningsAt(r: Reign, t: Year): Pick<Reign, 'leanings' | 'eff'> {
  * 一位接一位往后排,最后一朝只排到够用为止(在位到 t 以后的那一位),要更晚的再往后排
  */
 interface Book {
+  /** 本地分支 modern-pace:排的时候 Polity.modern 有几刻 */
+  mod: number;
   /** 按哪一套数排的(这张表的值;换了就重排) */
   k: RulersKnobs;
   tag: number;
@@ -430,7 +442,8 @@ export function reignBook(knobs: KnobSet, base: number, tag: number, p: ReignPol
   const dyn = segs ? segs.length : 1;
   const sz = p.seizes?.length ?? 0;
   let b = books.get(p);
-  if (!b || b.k !== K || b.dyn !== dyn || b.tag !== tag || b.sz !== sz || !sameActs(b.acts, acts)) {
+  const mod = p.modern?.length ?? 0;
+  if (!b || b.k !== K || b.dyn !== dyn || b.tag !== tag || b.sz !== sz || b.mod !== mod || !sameActs(b.acts, acts)) {
     const own = acts.length ? acts.slice() : NO_ACTS;
     let all: (RulerAct | RulerSeize)[] = own as RulerAct[];
     if (sz) {
@@ -438,7 +451,7 @@ export function reignBook(knobs: KnobSet, base: number, tag: number, p: ReignPol
       const seizes: RulerSeize[] = p.seizes!.map((x) => ({ kind: 'seize', t: x.year, k: x.k, born: x.born, until: x.until, leanings: x.leanings }));
       all = [...seizes, ...own].map((c, i) => ({ c, i })).sort((u, v) => u.c.t - v.c.t || (u.c.kind === 'seize' ? 0 : 1) - (v.c.kind === 'seize' ? 0 : 1) || u.i - v.i).map((x) => x.c);
     }
-    b = { k: K, tag, dyn, acts: own, sz, all, reigns: [], i: 0, j: 0, from: p.founded, heir: null, ci: 0 };
+    b = { k: K, tag, dyn, acts: own, sz, all, reigns: [], i: 0, j: 0, from: p.founded, heir: null, ci: 0, mod };
     books.set(p, b);
   }
   /** 第 i 朝到哪一刻为止(最后一朝 = 不断) */
@@ -449,7 +462,7 @@ export function reignBook(knobs: KnobSet, base: number, tag: number, p: ReignPol
     // 改制开的共和、军政府那几段照共和一系排(执政有任期);军政府的执政好战
     const regime = segs?.[dynasty]?.regime;
     const shift = regime === 'junta' ? JUNTA_SHIFT : regime === 'republic' && p.lineage !== 'republic' ? COMMONWEALTH_SHIFT : undefined;
-    const s = reignStep(knobs, base, tag, k, j, from, segLineage(p, dynasty), p.kind, u ? u.born : k === 0 ? p.prince : undefined, shift);
+    const s = reignStep(knobs, base, tag, k, j, from, segLineage(p, dynasty), p.kind, u ? u.born : k === 0 ? p.prince : undefined, shift, maxAgeFor(K.MAX_AGE, p, from));
     const leanings = u ? { ...u.leanings } : s.leanings;
     return { k, dynasty, j, from, age: s.age, natural: s.natural, leanings, eff: leaningEffect(leanings) };
   };

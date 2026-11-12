@@ -107,7 +107,8 @@ function groups(mode: NewWorldMode): { name: string; note?: string; keys: (keyof
           note: '山脉、高原怎么长',
           keys: ['plates', 'mountains', 'hardness'],
         },
-    { name: '气候', keys: ['temperature', 'rainfall'] },
+    // 本地分支 modern-pace:随机生成的气温由第一步「恒星系」里母星离恒星多远定,这里只留降水
+    mode === 'random' ? { name: '水汽', keys: ['rainfall'] } : { name: '气候', keys: ['temperature', 'rainfall'] },
     { name: '精细度', note: '越精细越慢', keys: ['cells'] },
   ];
 }

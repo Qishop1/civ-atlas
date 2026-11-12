@@ -57,7 +57,7 @@ import { buildOfficials, courtDeeds, deedPosts, generalPosts, topAltAt, type For
 import { authorPostsFrom } from './appoint';
 import { RG_DIED, RG_PURGE, RG_RETURN, RG_START, RG_USURP, regencyBase, regentsFrom, type AuthorRegentIv, type Regency, type RegencyCtx } from './regents';
 import { MARRIAGES_KNOBS, matchesFrom, type Match } from './marriages';
-import { IV_PEOPLE, K_RULER, RULERS_KNOBS, U_AGE, actsFrom, fallFate, leaningEffect, reignBook, rulerBase, rulerTags, type Crown, type Reign } from './rulers';
+import { IV_PEOPLE, K_RULER, RULERS_KNOBS, U_AGE, actsFrom, fallFate, leaningEffect, maxAgeFor, reignBook, rulerBase, rulerTags, type Crown, type Reign } from './rulers';
 import { policiesFrom, policyEffect, segAt } from './policy';
 import { splitSurname } from './surname';
 import { debutSex, nameWomen, pickWomen, type ConsortName } from './women';
@@ -476,7 +476,8 @@ function peopleOnce(civ: PeopleInput, kills: Kills): { people: Person[]; ids: Ma
           person.until = natural;
           if (republic) {
             person.fate = 'retired';
-            const died = q(Math.min(born + MAX_AGE, natural + AFTERLIFE * R(k, U_AFTER)));
+            // 本地分支 modern-pace:卸任执政的寿数上限也按即位时的近现代档数(同 rulers.ts 的 maxAgeFor)
+            const died = q(Math.min(born + maxAgeFor(MAX_AGE, p, from), natural + AFTERLIFE * R(k, U_AFTER)));
             if (died <= endYear) person.died = died;
           } else {
             person.fate = murderedAt(knobs, base, tag[p.id], k) ? 'murdered' : 'died';

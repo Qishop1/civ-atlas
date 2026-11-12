@@ -4,3 +4,7 @@
 .app.globe-on .ev-pins {
   z-index: 1;
 }
+/* 本地分支 modern-pace 第二十七轮:奇观层(太空电梯)同样浮在球上面 */
+.app.globe-on .wonder-layer {
+  z-index: 1;
+}

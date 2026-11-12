@@ -50,6 +50,7 @@ import { boostText } from './boostInfo';
 import { KEEP_CROWN } from './keepInfo';
 import { TREK_REACH_NAMES } from './trekInfo';
 import { eraText, spaced, yearAt, yearShort } from '../gen/era';
+import { moonAtlas, moonCoordText, moonPlaceName } from '../gen/civ/story/moonAtlas';
 
 // ---------------------------------------------------------------------------
 // 在地图上选目标
@@ -238,6 +239,12 @@ function disasterText(civ: Civ, v: Extract<Intervention, { kind: 'disaster' }>, 
  * 大迁徙、不许迁的说法:"克拉尔族:大迁徙，从诺敏塔拉往瑶渊之野""克拉尔族:大迁徙，去处推演挑（远）""克拉尔族:大迁徙，往南，去处推演挑"
  * "克拉尔族:不许迁(至第 2100 年)"
  */
+/** 本地分支 modern-pace:月面着陆点 */
+function moonsiteText(civ: Civ, v: Extract<Intervention, { kind: 'moonsite' }>): string {
+  const at = moonAtlas(civ);
+  return `第 ${v.from} 年以后头一次载人登月落在${moonPlaceName(at, v.lon, v.lat)}(${moonCoordText(v.lon, v.lat)})`;
+}
+
 function trekText(civ: Civ, v: Extract<Intervention, { kind: 'trek' | 'stay' }>): string {
   const F = cultureKeyName(civ, v.folk);
   if (v.kind === 'stay') return `${F}:不许迁${v.until !== undefined ? `(至第 ${v.until} 年)` : ''}`;
@@ -290,6 +297,7 @@ function ivText(civ: Civ, v: Intervention, i: number, a: string | undefined): st
   }
   if (v.kind === 'disaster') return disasterText(civ, v, i, a);
   if (v.kind === 'trek' || v.kind === 'stay') return trekText(civ, v);
+  if (v.kind === 'moonsite') return moonsiteText(civ, v);
   const A = a ?? keyName(civ, v.a, v.from);
   if (v.kind === 'boost') return boostText(civ, v, i, A, getEdits().era);
   switch (v.kind) {
@@ -399,7 +407,7 @@ function authorName(civ: Civ, char: number): string {
  * a = 下令的国家怎么称呼:国家面板下的令用面板标题上的名字(用户点的那个),不给 = 生效那年的名字
  */
 export function interventionDoneText(civ: Civ, v: Intervention, i = -1, a?: string): string {
-  if (v.kind === 'found' || v.kind === 'disaster' || v.kind === 'trek' || v.kind === 'stay') return interventionText(civ, v, i, a);
+  if (v.kind === 'found' || v.kind === 'disaster' || v.kind === 'trek' || v.kind === 'stay' || v.kind === 'moonsite') return interventionText(civ, v, i, a);
   const A = a ?? keyName(civ, v.a, v.from);
   switch (v.kind) {
     case 'protect':
@@ -418,7 +426,7 @@ export function interventionDoneText(civ: Civ, v: Intervention, i = -1, a?: stri
 
 /** 下令的国家在生效那一年叫什么(立国没有下令的国家 = null) */
 export function interventionActorThen(civ: Civ, v: Intervention): string | null {
-  return v.kind === 'found' || v.kind === 'trek' || v.kind === 'stay' || !v.a ? null : keyName(civ, v.a, v.from);
+  return v.kind === 'found' || v.kind === 'trek' || v.kind === 'stay' || v.kind === 'moonsite' || !v.a ? null : keyName(civ, v.a, v.from);
 }
 
 let owners: Owners | undefined;
@@ -480,7 +488,7 @@ export function polityOrders(civ: Civ, id: number, list: readonly unknown[]): { 
         !!e.v &&
         (e.v.kind === 'found'
           ? foundedBy(civ, e.c) === id
-          : e.v.kind !== 'trek' && e.v.kind !== 'stay' && (e.v.a === key || ((e.v.kind === 'ally' || e.v.kind === 'declare') && e.v.b === key))),
+          : e.v.kind !== 'trek' && e.v.kind !== 'stay' && e.v.kind !== 'moonsite' && (e.v.a === key || ((e.v.kind === 'ally' || e.v.kind === 'declare') && e.v.b === key))),
     );
 }
 
