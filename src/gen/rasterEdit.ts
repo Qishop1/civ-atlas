@@ -14,6 +14,7 @@
  */
 import type { World } from './world';
 import {
+  coastOf,
   coastShiftMax,
   coverFits,
   drain,
@@ -150,12 +151,13 @@ export function* rasterizePatchSteps(world: World, prev: RasterKeep, maxFrac = 0
     const { dTile, jTile } = noiseTiles(seed);
     // 逐像素按整行分段铺(一个像素只看输入,和一口气铺 W3 逐位相同;沟壑要算的像素照样按行记进 job0)
     const rows = Math.max(1, Math.floor(SHADE_STEP / w3.w));
+    const coast = coastOf(world);
     for (let y = w3.y0; y < w3.y0 + w3.h; y += rows) {
       const band = { x0: w3.x0, y0: y, w: w3.w, h: Math.min(rows, w3.y0 + w3.h - y) };
-      shadeSphere(raster, cover0.tri, cover0.wa, cover0.wb, inputs.planes, inputs.base, inputs.carve, inputs.calm, dTile, jTile, g, R, world.mesh.spacing, job0, null, band);
+      shadeSphere(raster, cover0.tri, cover0.wa, cover0.wb, inputs.planes, inputs.base, inputs.carve, inputs.calm, dTile, jTile, g, R, world.mesh.spacing, job0, null, band, coast);
       yield;
     }
-    dropSpecksIn(raster, speckMax(1), w3);
+    if (!coast) dropSpecksIn(raster, speckMax(1), w3);
     yield;
     // W3 比 W2 多出的那圈:换回原来的(那里本来就没变,去碎点只在 W2 里算得准)。就地改的,原来的取自改之前记下的那块
     const was = before?.box;
@@ -244,6 +246,17 @@ function inputChange(a: RasterInputs, b: RasterInputs, W: number, H: number): Pi
     if (!triChanged[tri[k]]) continue;
     const y = (k / W) | 0;
     mark(y, k - y * W);
+  }
+  // 照图原样的海岸:海陆照它逐像素定,地块没变也可能变(两张都是 1 倍主图大小,下标对得上)
+  const ca = a.coast?.soft;
+  const cb = b.coast?.soft;
+  if (ca !== cb) {
+    if (!ca || !cb || ca.length !== W * H || cb.length !== W * H) return { x0: 0, y0: 0, w: W, h: H };
+    for (let k = 0; k < ca.length; k++) {
+      if (ca[k] === cb[k]) continue;
+      const y = (k / W) | 0;
+      mark(y, k - y * W);
+    }
   }
   return boxOfCols(col, y0, y1);
 }
