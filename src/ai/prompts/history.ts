@@ -15,7 +15,8 @@
  *   界面就给旧史书标"写于历史改变之前"
  */
 import type { Civ, Person, Polity, Year } from '../../gen/civ/types';
-import { buildChronicle, cnNumber, entryInvolves, entryYearLabel, yearText, type ChronicleEntry } from '../../gen/civ/story/chronicle';
+import { buildChronicle, cnNumber, entryInvolves, entryYearLabel, mergeChronicle, yearText, type ChronicleEntry } from '../../gen/civ/story/chronicle';
+import { fullChronicle } from '../../gen/civ/story/religionText';
 import { capitalAt, polityName, polityTierAt, ownersAt } from '../../gen/readers/openQuery';
 import { dynastyTitle, polityShortTitle, polityTitleChain } from '../../gen/civ/growth';
 import { KIND_INFO, cultureLabel, regionLabel, regionNamed } from '../../gen/civ/story/display';
@@ -358,8 +359,25 @@ interface ScopeInfo {
   subject: Polity | null;
 }
 
+/** 第八十一轮:完整编年史里并进材料的几类(重要度 ≥ 2;插件写的都要);时代、科学史放〔技术与社会〕,商道、城市改名不进 */
+const EXTRA_KINDS: ReadonlySet<string> = new Set(['thought', 'faith', 'debris', 'partition', 'plugin']);
+const matCache = new WeakMap<Civ, ChronicleEntry[]>();
+
+/**
+ * 第八十一轮:写史书的纪事 = 史事(buildChronicle)+ 完整编年史(fullChronicle)里的思潮、宗教、轨道、瓜分无主地、插件。
+ * fullChronicle 遇到 Civ.history 按整段历史算,这里截到 civ.endYear
+ */
+function materialChronicle(civ: Civ): ChronicleEntry[] {
+  const hit = matCache.get(civ);
+  if (hit) return hit;
+  const extra = fullChronicle(civ).filter((e) => EXTRA_KINDS.has(e.kind) && e.year <= civ.endYear && (e.importance >= 2 || e.kind === 'plugin'));
+  const out = mergeChronicle(buildChronicle(civ), extra);
+  matCache.set(civ, out);
+  return out;
+}
+
 function scopeInfo(civ: Civ, scope: HistoryScope): ScopeInfo | null {
-  const all = buildChronicle(civ);
+  const all = materialChronicle(civ);
   const end = Y(civ.endYear);
   if (scope.kind === 'world') return { from: 0, to: end, entries: all, subject: null };
   if (scope.kind === 'polity') {
@@ -1257,7 +1275,8 @@ export const SYSTEM_PROMPT = [
   '6. 新添的人名要合所属民族的语感:东方式国家用中式姓名(一朝的皇族都姓开国之君的姓);西幻式国家用音译名,风格参照这一族的地名、国名。' +
     '同一部书里不同的人不要重名,也不要共用同一个字号;名字要有这一族的特色,不要千篇一律。新添人物的一生要合情理(活不过百岁),几百年间的事分给不同的人,不要让一个人横跨几百年。',
   '7. 这是架空世界:不要出现地球上真实的国家、朝代、民族、语言、宗教、神祇、人物、典籍、制度、年号和地名,也不要借用现成小说、游戏里的人名地名。' +
-    '材料括号里的风格标签(东方式、西幻式、某某风)只是告诉你起名和行文的味道:正文里不要写出这些词,也不要顺着它们写出现实里的语言、神祇、制度和人名。',
+    '材料括号里的风格标签(东方式、西幻式、某某风)只是告诉你起名和行文的味道:正文里不要写出这些词,也不要顺着它们写出现实里的语言、神祇、制度和人名;' +
+    '补细节也不要用现实里的专名制度、礼仪(如科举、元老院、凯旋式、三跪九叩)。',
   '8. 只输出正文(Markdown):不写全书的书名,不写"好的""以下是……"之类的开场白,不加括号注释说明材料缺什么,结尾也不要解释你做了什么。',
 ].join('\n');
 
@@ -1358,35 +1377,58 @@ const ERA_ITEMS = ['铁路', '电报', '汽船', '电力', '汽车', '无线电'
 const MAX_ERA_ITEMS = 14;
 
 /**
- * 第七十八轮:y 年时世上已经有了什么(推演的发明记录:哪一样在世上第一次出现);还没有铁路的(近代以前)不写。
- * 近地轨道被碎片封锁着的(史事 orbit n = 1)写出来:卫星、导航失效,航天发射暂停
+ * 材料(纪事之外的部分),按预算裁剪:国家、民族按顺序放,放不下的略去。
+ * info = 这一次调用写的那一段(分章时是一章),book = 全书;snapshots = 列出哪几年的格局;clip = 国家材料写到哪年
  */
-function eraText(civ: Civ, y: Year, from: Year = y): string {
+/** 第八十一轮:〔技术与社会〕最多列几条发明、科学的大事 */
+const TECH_MAX = 16;
+
+/**
+ * 第八十一轮:〔技术与社会〕—— clip 这一段:
+ *   开始时世上已经有的(近现代以后才写,取最近 MAX_ERA_ITEMS 样);
+ *   这一段里世上头一回的发明、进入新时代("为天下之先"),科学史(编年史"学"),国史再加上本国进入新时代;
+ *     多于 TECH_MAX 条时先留重要的(大事、科学),再按年份排;
+ *   和这一段重叠的近地轨道碎片封锁
+ */
+function techText(civ: Civ, clip: Clip, subject: Polity | null, max = TECH_MAX): string {
   const h = civ.history ?? civ;
+  const lines: string[] = [];
   const dev = h.development;
-  if (!dev) return '';
-  const first = new Map<string, number>();
-  for (const e of dev.events as { kind: string; year: number; invention?: number }[]) {
-    if (e.kind !== 'invent' || e.invention === undefined || e.year > y) continue;
-    const n = INVENTIONS[e.invention]?.name;
-    if (n && !(first.get(n)! <= e.year)) first.set(n, e.year);
+  if (dev && clip.from > 0) {
+    const first = new Map<string, number>();
+    for (const e of dev.events as { kind: string; year: number; invention?: number }[]) {
+      if (e.kind !== 'invent' || e.invention === undefined || e.year >= clip.from) continue;
+      const n = INVENTIONS[e.invention]?.name;
+      if (n && !(first.get(n)! <= e.year)) first.set(n, e.year);
+    }
+    if (first.has('铁路')) {
+      const have = ERA_ITEMS.filter((n) => first.has(n));
+      const shown = have.length > MAX_ERA_ITEMS ? have.slice(have.length - MAX_ERA_ITEMS) : have;
+      const older = have.slice(0, have.length - shown.length);
+      lines.push(`- 这一段开始时(第 ${Y(clip.from)} 年)世上已经有:${shown.join('、')}${older.length ? `(更早的${older.slice(0, 3).join('、')}${older.length > 3 ? '等' : ''}也都有)` : ''}`);
+    }
   }
-  if (!first.has('铁路')) return '';
-  const have = ERA_ITEMS.filter((n) => first.has(n));
-  const shown = have.length > MAX_ERA_ITEMS ? have.slice(have.length - MAX_ERA_ITEMS) : have;
-  const lines = [`- 第 ${Y(y)} 年时世上已经有:${shown.join('、')}${have.length > shown.length ? '(更早的铁路、飞机、电网、核武器这些都有,不再列)' : ''}`];
+  const from = Y(clip.from);
+  const to = Math.min(Y(clip.to), Y(civ.endYear));
+  const cand = fullChronicle(civ).filter((e) => {
+    const y = Y(e.year);
+    if (y < from || y > to) return false;
+    if (e.kind === 'science') return true;
+    if (e.kind !== 'era') return false;
+    return e.text.includes('为天下之先') || e.text.includes('在全世界率先') || (!!subject && e.polities.includes(subject.id) && e.importance >= 2 && e.text.includes('时代'));
+  });
+  const rank = (e: ChronicleEntry) => e.importance * 2 + (e.kind === 'science' ? 1 : 0);
+  const keep = new Set([...cand].sort((a, b) => rank(b) - rank(a) || a.year - b.year).slice(0, max));
+  for (const e of cand) if (keep.has(e)) lines.push(`- ${e.importance >= 3 ? '★' : ''}${entryYearLabel(e)} ${e.text}`);
+  if (cand.length > keep.size) lines.push(`- (另有${cnNumber(cand.length - keep.size)}项发明、发现从略)`);
   for (const a of h.annals) {
-    if (a.kind !== 'orbit' || a.n !== 1 || a.year > y) continue;
+    if (a.kind !== 'orbit' || a.n !== 1 || a.year > clip.to) continue;
     const until = a.oob?.[2] ?? a.year + (a.oob?.[0] ?? 0);
-    if (until > from) lines.push(`- 第 ${Y(a.year)} 年起近地轨道被卫星碎片封锁(约到第 ${Y(until)} 年清理完):这期间各国卫星、卫星导航失效,航天发射暂停,轨道货运停摆`);
+    if (until > clip.from) lines.push(`- 第 ${Y(a.year)} 年起近地轨道被卫星碎片封锁(约到第 ${Y(until)} 年清理完):这期间各国卫星、卫星导航失效,航天发射暂停,轨道货运停摆`);
   }
   return lines.join('\n');
 }
 
-/**
- * 材料(纪事之外的部分),按预算裁剪:国家、民族按顺序放,放不下的略去。
- * info = 这一次调用写的那一段(分章时是一章),book = 全书;snapshots = 列出哪几年的格局;clip = 国家材料写到哪年
- */
 function contextParts(civ: Civ, info: ScopeInfo, book: ScopeInfo, picked: Set<ChronicleEntry>, budget: number, snapshots: Year[], clip: Clip): Parts {
   const stats = rangeStats(civ, clip.from, clip.to);
   const ends = endings(civ);
@@ -1423,7 +1465,7 @@ function contextParts(civ: Civ, info: ScopeInfo, book: ScopeInfo, picked: Set<Ch
     left -= line.length + 1;
   }
   if (skipped) polLines.push(`- (另有${cnNumber(skipped)}个国家从略)`);
-  return { overview, geography, cultures: cuLines.join('\n'), polities: polLines.join('\n'), situation, era: eraText(civ, clip.to, clip.from) };
+  return { overview, geography, cultures: cuLines.join('\n'), polities: polLines.join('\n'), situation, era: techText(civ, clip, book.subject, Math.max(4, Math.min(TECH_MAX, Math.floor(budget / 250)))) };
 }
 
 /** 第八十轮:〔同类事〕统计哪几种(编年史条目的 kind → 叫法) */
@@ -1431,7 +1473,8 @@ const TALLY_KINDS: Readonly<Record<string, string>> = {
   war: '战争',
   plague: '疫病',
   famine: '饥荒',
-  nuke: '核试验、动用核武',
+  nuke: '动用核武、军控',
+  'nuke-test': '核试验',
   split: '分裂、独立',
   merge: '加入、并入',
   fall: '亡国、灭国',
@@ -1460,12 +1503,38 @@ function deathsIn(text: string): number {
  * 第八十轮:〔同类事〕—— 这一段里出现 TALLY_MIN 次以上的同类事:次数、年份(最多 TALLY_YEARS 个)、疫病 / 饥荒的死亡合计。
  * 统计全部条目(不只挑进材料的),让 AI 能合起来写"此后两百年间大疫五起"而不用自己数
  */
+/** 第八十一轮:战争的由头(按编年史正文认;认不出的不计) */
+const WAR_CAUSES: readonly [RegExp, string][] = [
+  [/共同防御|应盟国|援盟|依约/, '依约参战'],
+  [/转移视线|国内矛盾/, '转移国内矛盾'],
+  [/收复|复故土|失地/, '收复失地'],
+  [/趁|乘.*之乱|有难/, '趁邻国有难'],
+  [/保护国/, '援救保护国'],
+  [/边界|争边/, '边界争端'],
+  [/吞并/, '企图吞并'],
+  [/统一/, '为统一天下'],
+  [/背弃盟约|背盟/, '背盟'],
+  [/绝贡|不贡|朝贡/, '讨伐不贡'],
+];
+
+function warCauses(l: readonly ChronicleEntry[]): string {
+  const n = new Map<string, number>();
+  for (const e of l) {
+    const c = WAR_CAUSES.find(([re]) => re.test(e.text));
+    if (c) n.set(c[1], (n.get(c[1]) ?? 0) + 1);
+  }
+  const xs = [...n].filter(([, k]) => k >= 2).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  return xs.length ? `;其中${xs.map(([c, k]) => `${c} ${k} 次`).join('、')}` : '';
+}
+
 function tallyText(entries: readonly ChronicleEntry[]): string {
   const g = new Map<string, ChronicleEntry[]>();
   for (const e of entries) {
-    if (!TALLY_KINDS[e.kind]) continue;
-    let l = g.get(e.kind);
-    if (!l) g.set(e.kind, (l = []));
+    // 第八十一轮:核试验和动用核武分开数
+    const key = e.kind === 'nuke' && e.text.includes('核试验') ? 'nuke-test' : e.kind;
+    if (!TALLY_KINDS[key]) continue;
+    let l = g.get(key);
+    if (!l) g.set(key, (l = []));
     l.push(e);
   }
   const rows = [...g].filter(([, l]) => l.length >= TALLY_MIN).sort((a, b) => b[1].length - a[1].length);
@@ -1479,7 +1548,7 @@ function tallyText(entries: readonly ChronicleEntry[]): string {
         const d = l.reduce((t, e) => t + deathsIn(e.text), 0);
         if (d >= 1e4) dead = `,合计死亡约 ${d >= 1e8 ? `${Math.round(d / 1e7) / 10} 亿` : `${Math.round(d / 1e4)} 万`}人`;
       }
-      return `- ${TALLY_KINDS[k]} ${l.length} 次(${yt})${dead}`;
+      return `- ${TALLY_KINDS[k]} ${l.length} 次(${yt}${k === 'war' ? warCauses(l) : ''})${dead}`;
     })
     .join('\n');
 }
@@ -1498,7 +1567,7 @@ function materialText(parts: Parts, chron: string, dropped: number, chapter = ''
     out.push('', `〔国家〕(括号里是起名和行文的风格提示,不要写进正文;国号随年份变化,写到哪一年就用那一年的国号${until})`, parts.polities);
   }
   if (parts.situation) out.push('', '〔格局〕(当时各国的大小和国都)', parts.situation);
-  if (parts.era) out.push('', '〔时代〕(这一段结束时世上已经有的东西;写近现代的事按这个补细节)', parts.era);
+  if (parts.era) out.push('', '〔技术与社会〕(这一段开始时已有的、这一段里世上头一回的发明和科学突破;补细节按这里的时代补)', parts.era);
   if (people) out.push('', '〔人物〕(列传可用的统帅、名臣:生卒年照这里写;每一仗写的是"攻方、守方 → 结果",攻守和结果不能改)', people);
   if (tally) out.push('', '〔同类事〕(这一段里反复出现的事;写的时候合起来写,不要逐条复述)', tally);
   out.push('', `〔编年史〕${chapter}`, chron || '- (这段时间没有记下什么事)');
@@ -1508,23 +1577,32 @@ function materialText(parts: Parts, chron: string, dropped: number, chapter = ''
 /** 写作要求里的"取舍"一条 */
 /** 第八十轮:同类事合写、兵种编制不每仗重复(各文体共用) */
 const MERGE_RULE =
-  '〔同类事〕里反复出现的事(疫病、依约参战、民变、核试验、议政……)合起来写一两句,说次数、年份范围和总的后果,只把其中关键的一两次展开;' +
-  '战事里的兵种编制("三个无人舰艇集群在无人机蜂群掩护下登陆"这类)只在头一回或关键的一仗写,其余的仗写攻守、得失就够了';
+  '〔同类事〕里反复出现的事合起来写一两句(次数、年份范围、总的后果),只展开关键的一两次;疫病的应对只在头一回写;' +
+  '兵种编制(如"三个无人舰艇集群")只在头一回或关键的一仗写';
 
 /** 写作要求里的"取舍"一条(第八十轮:按文体;用户"这什么流水账") */
+/** 第八十一轮:技术与社会要写(用户"完全看不出来科学发展 全是战争史") */
+const TECH_RULE =
+  '每章至少一段写〔技术与社会〕里的变化(发明、科学、思潮、宗教)怎样改变了打仗、治国和百姓的日子;战争写大势和关键的一两仗,不要占去一章的大半';
+
+/** 第八十一轮:"求实"一条(不倒叙、不编"第一次"、补写言行不冒充史书、不推方位和年数、结尾不抄清单) */
+export const FACT_RULE =
+  '- 求实:按年份先后写,不要倒回去写更早的年份;材料没写的"第一次""唯一""第几次"不要写;补写的言行不要冒充"史书记载";' +
+  '材料没写的方位、相隔年数不要自己推;结尾写到最后一年的实情就收住,不要整串抄〔技术与社会〕的清单';
+
 function chooseLine(style: HistoryStyle): string {
-  if (style === 'annals') return `- 取舍:以 ★ 大事为骨架,挑能说明因果的小事写,其余略去;${MERGE_RULE};材料里没有的时期就少写,不要硬凑`;
+  if (style === 'annals') return `- 取舍:以 ★ 大事为骨架,挑能说明因果的小事写,其余略去;发明、科学的大事也按年记进去;${MERGE_RULE};材料里没有的时期就少写,不要硬凑`;
   return (
     '- 取舍:每一章先想清楚这一段的主线(这些年里这个国家 / 天下变了什么,比如从游牧到共和、从扩张到屡败、从对峙到联合),按主线挑事、分段:' +
     '一段讲一件事或一个时期的来龙去脉,不要一年一段、一件事一段,不要逐条复述编年史;★ 大事是骨架,能说明主线因果的小事展开写,和主线无关的一笔带过或略去;' +
-    `${MERGE_RULE};材料里没有的时期就少写,不要硬凑`
+    `${TECH_RULE};${MERGE_RULE};材料里没有的时期就少写,不要硬凑`
   );
 }
 
 /** 写作要求里的"笔调"一条(各文体共用) */
 /** 第七十八轮:补细节按时代补(用户"神他妈未来时代的跨境商队");开战由头不另编;事件不挂错人;正文不提"材料" */
 export const ERA_RULE =
-  '- 时代:细节只能按当时的时代补,〔时代〕里列着那时世上已经有的东西 —— 近现代以后的救灾、调兵、通商写铁路、航空、电网、管道、配给、空运、医疗队、无人机、卫星、轨道货运这些,' +
+  '- 时代:细节只能按当时的时代补,〔技术与社会〕里列着那时世上已经有和新出现的东西 —— 近现代以后的救灾、调兵、通商写铁路、航空、电网、管道、配给、空运、医疗队、无人机、卫星、轨道货运这些,' +
   '不要写驿马、官仓开仓、商队、木船、宫廷减膳这类古代的东西;开战的由头只写材料里给的(如"因边界争端""为完成全球统一"),不要另编"商队被劫""使节被杀"之类的具体事件;' +
   '一件事只能写到当时在位、在世的人名下,某人即位以前、去世以后的事不要算到他头上;正文里不要出现"材料""记载""数据"这类字眼';
 
@@ -1619,7 +1697,7 @@ export function buildHistoryPrompts(civ: Civ, opts: HistoryOptions): HistoryProm
       );
     }
     if (people) lines.push(LIVES_RULE);
-    lines.push(chooseLine(opts.style), ERA_RULE, TONE);
+    lines.push(chooseLine(opts.style), ERA_RULE, FACT_RULE, TONE);
     const head = lines.join('\n');
     calls.push({
       title,
@@ -1696,7 +1774,7 @@ export function buildHistoryPrompts(civ: Civ, opts: HistoryOptions): HistoryProm
       if (verdict) angle.push(`"史臣曰"${opts.style === 'annals' ? '(如果有)' : ''}${VERDICTS[((off >> 3) + i) % VERDICTS.length]}`);
       if (angle.length) lines.push(`- 开头和评语:${angle.join(';')}`);
       if (people) lines.push(LIVES_RULE);
-      lines.push(chooseLine(opts.style), ERA_RULE, TONE);
+      lines.push(chooseLine(opts.style), ERA_RULE, FACT_RULE, TONE);
       calls.push({
         title: `${title} · ${label(i)}`,
         chapter: i,

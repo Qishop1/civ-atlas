@@ -4177,7 +4177,7 @@ function reformCouncilText(civ: Civ, e: Annal, id: number, who: Person | null, i
         return `${lead}讨论废除${throneWord(P, y)},${stop}`;
       default:
         if (out === 0) return reformDoneText(civ, e, ix);
-        return `${A}讨论把权力交还${bodyOf(civ, e.a, y)},${who ? `执政${who.name}` : '军方'}拒绝,不了了之`;
+        return `${A}讨论把权力交还${bodyOf(civ, e.a, y)},${who ? `${modernState(P, y) ? '军政府首脑' : '执政'}${who.name}` : '军方'}拒绝,不了了之`;
     }
   }
   switch (e.war) {
@@ -4221,11 +4221,13 @@ function reformDoneText(civ: Civ, e: Annal, ix: PeopleIndex | null): string {
   }
   const body = bodyOf(civ, e.a, y);
   const old = endedAt(ix, e.a, y);
-  if (e.war === Issue.Return) return V ? `${A}决定还政:${old ? `执政${old.name}下台,` : ''}国家大事重新由${body}决定,执政由选举产生` : `${A}议还政,议成:${old ? `执政${old.name}去位,` : ''}国事复由${body}议定、推举执政`;
+  // 第八十一轮:电气时代以后"军政府首脑某某下台……总统由选举产生"
+  const mod = modernState(P, y);
+  if (e.war === Issue.Return) return V ? `${A}决定还政:${old ? `${mod ? '军政府首脑' : '执政'}${old.name}下台,` : ''}国家大事重新由${body}决定,${mod ? '总统' : '执政'}由选举产生` : `${A}议还政,议成:${old ? `执政${old.name}去位,` : ''}国事复由${body}议定、推举执政`;
   // 废君立共和:"博戈维纳王国议废王位,议成:国王斯坦波尔克逊位,国事改由议事会议定、推举执政,国号改称博戈维纳共和国"
   const tier = Math.max(1, P ? polityTierAt(P, y - 1 / 512) : 2);
   const king = old ? (east ? rulerBare(civ, old, y) : `${westRank(old, westLineage(P, y), tier)}${old.name}`) : '';
-  if (V) return `${A}决定废除${throneWord(P, y - 1 / 512)}:${king ? `${king}退位,` : ''}改行共和,国家大事由${body}决定,执政由选举产生,国号改为${pn(civ, e.a, y)}`;
+  if (V) return `${A}决定废除${throneWord(P, y - 1 / 512)}:${king ? `${king}退位,` : ''}改行共和,国家大事由${body}决定,${mod ? '总统' : '执政'}由选举产生,国号改为${pn(civ, e.a, y)}`;
   return `${A}议废${throneWord(P, y - 1 / 512)},议成:${king ? `${king}逊位,` : ''}国事改由${body}议定、推举执政,国号改称${pn(civ, e.a, y)}`;
 }
 
