@@ -1390,7 +1390,8 @@ export function installWars(sim: CivSim, pm: PolityModel, world: World, wm: WarM
       let region: number;
       let settlement = -1;
       if (wave === 2) {
-        const cc = cities[(j - Math.ceil(0.9 * n)) % cities.length];
+        // 第八十七轮:取正余数 —— j 比 ceil(0.9 n) 小一时原来是 −1,取到空值崩掉(seed 22 推到 5000)
+        const cc = cities[(((j - Math.ceil(0.9 * n)) % cities.length) + cities.length) % cities.length];
         settlement = cc.c;
         region = pm.settlements[cc.c].region;
       } else {

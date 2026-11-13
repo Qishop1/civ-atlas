@@ -14,7 +14,8 @@ import { useEffect, useMemo, useRef, type MutableRefObject } from 'react';
 import type { Civ } from '../gen/civ/types';
 import type { World } from '../gen/world';
 import { orbitalRing, spaceTowers, type SpaceTower } from '../gen/civ/story/spaceText';
-import { DEBRIS_N, blockadesOf, debrisDensity, debrisPoint, towerSevered } from '../gen/civ/orbit';
+import { DEBRIS_N, blockadesOf, debrisDensity, debrisPoint, debrisSpread, satCounts, satOrbit, satPathPoint, satPoint, towerSevered, type SatOrbit, type SatYears } from '../gen/civ/orbit';
+import { INVENTIONS } from '../gen/civ/inventions';
 import { worldToLonLat } from '../render/globe';
 import { getCivTime } from './civView';
 import type { WorldToClient } from './EventPins';
@@ -27,6 +28,9 @@ const R2D = 180 / Math.PI;
 const GLOBE_TOP = 35786 / 6371;
 /** 平面图上光柱多高(像素) */
 const FLAT_TOP = 72;
+/** 第八十七轮:轨道线一圈取几个点、近地散布的卫星画前几颗的轨道 */
+const ORBIT_STEPS = 72;
+const ORBIT_LEO = 40;
 
 export interface WonderLayerProps {
   civ: Civ | null;
@@ -69,7 +73,19 @@ export function WonderLayer({ civ, world, toClient, globe, hidden }: WonderLayer
   globeRef.current = globe;
   // 第六十六轮:凯斯勒碎片壳(轨道封锁期间)
   const blocks = useMemo(() => (has ? blockadesOf((civ!.history ?? civ!).annals) : []), [civ, has]);
-  const show = !hidden && (sites.length > 0 || blocks.length > 0);
+  // 第八十七轮:平时轨道上的卫星 —— 世上第一次有这几样发明的年份
+  const satYears = useMemo<SatYears>(() => {
+    const dev = has ? (civ!.history ?? civ!).development : undefined;
+    if (!dev) return {};
+    const first = new Map<string, number>();
+    for (const e of dev.events as { kind: string; year: number; invention?: number }[]) {
+      if (e.kind !== 'invent' || e.invention === undefined) continue;
+      const n = INVENTIONS[e.invention]?.name;
+      if (n && !(first.get(n)! <= e.year)) first.set(n, e.year);
+    }
+    return { sat: first.get('人造卫星'), comm: first.get('通信卫星'), nav: first.get('卫星导航'), mega: first.get('可回收火箭') };
+  }, [civ, has]);
+  const show = !hidden && (sites.length > 0 || blocks.length > 0 || satYears.sat !== undefined);
 
   useEffect(() => {
     if (!show || !civ) return;
@@ -91,12 +107,53 @@ export function WonderLayer({ civ, world, toClient, globe, hidden }: WonderLayer
       const G = globeRef.current?.current ?? null;
       const tc = toClient.current;
       const now = performance.now() / 1000;
+      // ---- 第八十七轮:平时轨道上的卫星(不闪的白、青点,偶尔反光一下;近地、同步、导航、大星座四类) ----
+      if (G && satYears.sat !== undefined) {
+        const cnt = satCounts(satYears, blocks, year);
+        const col = ['236,242,250', '255,236,190', '170,230,255', '214,236,255'];
+        // 轨道线(半透明;被球挡住的段不画):同步轨道一圈、导航 6 个面、大星座每层三分之一的面、近地散布的前 ORBIT_LEO 颗
+        const path = (o: SatOrbit, rgba: string, w: number) => {
+          ctx.strokeStyle = rgba;
+          ctx.lineWidth = w;
+          ctx.beginPath();
+          let pen = false;
+          for (let k = 0; k <= ORBIT_STEPS; k++) {
+            const p = satPathPoint(o, (k / ORBIT_STEPS) * Math.PI * 2);
+            const q = G.lonLatAltToClient(p.lon, p.lat, p.h);
+            if (!q) {
+              pen = false;
+              continue;
+            }
+            if (pen) ctx.lineTo(q[0] - rect.left, q[1] - rect.top);
+            else ctx.moveTo(q[0] - rect.left, q[1] - rect.top);
+            pen = true;
+          }
+          ctx.stroke();
+        };
+        if (cnt[1] > 0) path(satOrbit(1, 0), `rgba(${col[1]},0.22)`, 1);
+        for (let pl = 0; pl < Math.min(6, cnt[2]); pl++) path(satOrbit(2, pl), `rgba(${col[2]},0.16)`, 0.8);
+        for (let i = 0; i < Math.min(90, cnt[3]); i++) if (Math.floor(i / 3) % 3 === 0) path(satOrbit(3, i), `rgba(${col[3]},0.07)`, 0.6);
+        for (let i = 0; i < Math.min(ORBIT_LEO, cnt[0]); i++) path(satOrbit(0, i), `rgba(${col[0]},0.06)`, 0.6);
+        for (let kind = 0; kind < 4; kind++) {
+          for (let i = 0; i < cnt[kind]; i++) {
+            const p = satPoint(kind, i, now);
+            const q = G.lonLatAltToClient(p.lon, p.lat, p.h);
+            if (!q) continue;
+            const glint = (i * 7 + kind * 13 + Math.floor(now * 0.6)) % 173 === 0;
+            ctx.fillStyle = `rgba(${col[kind]},${glint ? 1 : kind === 3 ? 0.55 : 0.75})`;
+            const sz = glint ? 2.4 : kind === 1 ? 1.5 : kind === 3 ? 0.9 : 1.2;
+            ctx.fillRect(q[0] - rect.left - sz / 2, q[1] - rect.top - sz / 2, sz, sz);
+          }
+        }
+      }
       // ---- 凯斯勒碎片壳:地球仪上离地 300–2000 km 一层闪烁的灰白点(被球挡住的不画);越清理越稀 ----
+      // 第八十七轮:封锁头几年先是被打碎的那个轨道面上的一道环,再散成整层壳
       const dd = G ? debrisDensity(blocks, year) : 0;
       if (dd > 0) {
         const n = Math.floor(DEBRIS_N * Math.pow(dd, 0.6));
+        const spread = debrisSpread(blocks, year);
         for (let i = 0; i < n; i++) {
-          const p = debrisPoint(i, now);
+          const p = debrisPoint(i, now, spread);
           const q = G!.lonLatAltToClient(p.lon, p.lat, p.h);
           if (!q) continue;
           const tw = 0.55 + 0.45 * Math.sin(now * (2 + (i % 7)) + i);

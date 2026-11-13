@@ -66,14 +66,20 @@ export function blockadesOf(annals: readonly { kind: string; n?: number; year: n
 
 /** 第六十六轮:凯斯勒碎片壳的点(按编号定:倾角、升交点、起始相位、高度、角速度) */
 export const DEBRIS_N = 2600;
-export function debrisPoint(i: number, t: number): { lon: number; lat: number; h: number } {
+/** 第八十七轮:碎片刚撞出来时集中在哪个轨道面(倾角、升交点,弧度);spread 从 0 到 1 散成整层壳 */
+const RING_INC = 1.13;
+const RING_NODE = 0.7;
+export function debrisPoint(i: number, t: number, spread = 1): { lon: number; lat: number; h: number } {
   const r = (k: number) => {
     const v = Math.sin(i * 12.9898 + k * 78.233) * 43758.5453;
     return v - Math.floor(v);
   };
-  const inc = Math.acos(1 - 2 * r(1)) ;
-  const node = r(2) * Math.PI * 2;
-  const h = 0.05 + 0.25 * Math.pow(r(3), 1.6);
+  const s = Math.max(0, Math.min(1, spread));
+  const inc = s >= 1 ? Math.acos(1 - 2 * r(1)) : (1 - s) * (RING_INC + 0.06 * (r(6) - 0.5)) + s * Math.acos(1 - 2 * r(1));
+  const node = s >= 1 ? r(2) * Math.PI * 2 : (1 - s) * (RING_NODE + 0.08 * (r(7) - 0.5)) + s * r(2) * Math.PI * 2;
+  // 第八十七轮:刚撞出来时都在差不多一个高度(一道细环),随散开放宽到 0.05–0.3 个半径
+  const h0 = 0.05 + 0.25 * Math.pow(r(3), 1.6);
+  const h = s >= 1 ? h0 : (1 - s) * (0.11 + 0.025 * (r(8) - 0.5)) + s * h0;
   // 低的转得快(按开普勒 ∝ (1 + h)^-1.5),几十秒绕一圈(看得出在动,不晃眼)
   const w = (0.12 + 0.05 * r(4)) * Math.pow(1 + h, -1.5);
   const u = r(5) * Math.PI * 2 + w * t;
@@ -87,6 +93,100 @@ export function debrisDensity(blocks: readonly { year: number; until: number }[]
   let d = 0;
   for (const b of blocks) if (year >= b.year && year < b.until) d = Math.max(d, 1 - (year - b.year) / Math.max(1, b.until - b.year));
   return d;
+}
+
+/** 第八十七轮:碎片散开了几成(封锁头 RING_YEARS 年从一道环散成整层壳;不在封锁里 = 1) */
+export const RING_YEARS = 3;
+export function debrisSpread(blocks: readonly { year: number; until: number }[], year: number): number {
+  // 先慢后快(进度的平方):头一两年还看得出是一道环
+  for (const b of blocks) if (year >= b.year && year < b.until) return Math.min(1, ((year - b.year) / RING_YEARS) ** 2);
+  return 1;
+}
+
+/**
+ * 第八十七轮:平时轨道上的卫星(地球仪上画;只读推演的发明年份和碎片封锁,不改推演)。四类:
+ *   0 近地散布(人造卫星以后,60 年长到 SAT_MAX[0] 颗,倾角随意、离地 0.06–0.3 个半径)
+ *   1 同步轨道(通信卫星以后,50 年长满;赤道上空 5.62 个半径,钉在经度上)
+ *   2 导航星座(卫星导航以后,15 年长满;6 个轨道面 × 4 颗,倾角 55°,3.17 个半径)
+ *   3 近地大星座(可回收火箭以后,40 年长满;三层壳 53° / 70° / 97.6°,每层 30 个轨道面)
+ * 碎片封锁期间近地、中轨的都没了(同步轨道太高不受影响),解封以后 SAT_REGROW 年长回来
+ */
+export const SAT_MAX = [150, 80, 24, 900] as const;
+const SAT_REGROW = 30;
+export interface SatYears {
+  sat?: number;
+  comm?: number;
+  nav?: number;
+  mega?: number;
+}
+export function satCounts(y: SatYears, blocks: readonly { year: number; until: number }[], year: number): number[] {
+  const ramp = (y0: number | undefined, span: number) => (y0 === undefined || year < y0 ? 0 : Math.min(1, (year - y0) / span));
+  let low = 1;
+  for (const b of blocks) {
+    if (year >= b.year && year < b.until) low = 0;
+    else if (year >= b.until && year < b.until + SAT_REGROW) low = Math.min(low, (year - b.until) / SAT_REGROW);
+  }
+  return [
+    Math.round(SAT_MAX[0] * ramp(y.sat, 60) * low),
+    Math.round(SAT_MAX[1] * ramp(y.comm, 50)),
+    Math.round(SAT_MAX[2] * ramp(y.nav, 15) * low),
+    Math.round(SAT_MAX[3] * ramp(y.mega, 40) * low),
+  ];
+}
+
+/** 轨道面里的相位 u、倾角、升交点(弧度)→ 经纬度(度) */
+function orbitLonLat(u: number, inc: number, node: number): { lon: number; lat: number } {
+  const x = Math.cos(u), y = Math.sin(u) * Math.cos(inc), z = Math.sin(u) * Math.sin(inc);
+  const lon = Math.atan2(y, x) + node;
+  return { lon: ((lon * 180) / Math.PI + 540) % 360 - 180, lat: (Math.asin(Math.max(-1, Math.min(1, z))) * 180) / Math.PI };
+}
+
+/** 第 kind 类第 i 颗卫星的轨道:倾角、升交点(弧度)、离地几个半径、初相、角速度(弧度 / 秒,动画时间)。同步轨道钉在经度上,不用这个 */
+export interface SatOrbit {
+  inc: number;
+  node: number;
+  h: number;
+  u0: number;
+  w: number;
+}
+export function satOrbit(kind: number, i: number): SatOrbit {
+  const r = (k: number) => {
+    const v = Math.sin(i * 91.3458 + kind * 17.17 + k * 47.853) * 24634.6345;
+    return v - Math.floor(v);
+  };
+  const D = Math.PI / 180;
+  const speed = (h: number) => 0.12 * Math.pow(1 + h, -1.5);
+  if (kind === 1) return { inc: 0, node: 0, h: 5.62, u0: 0, w: 0 };
+  if (kind === 2) {
+    const plane = i % 6;
+    const slot = Math.floor(i / 6) % 4;
+    return { inc: 55 * D, node: plane * (Math.PI / 3), h: 3.17, u0: slot * (Math.PI / 2) + plane * 0.26, w: speed(3.17) };
+  }
+  if (kind === 3) {
+    const shell = i % 3;
+    const j = Math.floor(i / 3);
+    const plane = j % 30;
+    const slot = Math.floor(j / 30);
+    const h = 0.085 + 0.004 * shell;
+    return { inc: [53, 70, 97.6][shell] * D, node: plane * 0.2094 + shell * 0.07, h, u0: slot * 0.628 + plane * 0.21, w: speed(h) };
+  }
+  const h = 0.06 + 0.24 * Math.pow(r(3), 1.4);
+  return { inc: Math.acos(1 - 2 * r(1)), node: r(2) * Math.PI * 2, h, u0: r(5) * Math.PI * 2, w: (0.9 + 0.2 * r(4)) * speed(h) };
+}
+
+/** 轨道上相位 u 处的点(画轨道线用) */
+export function satPathPoint(o: SatOrbit, u: number): { lon: number; lat: number; h: number } {
+  return { ...orbitLonLat(u, o.inc, o.node), h: o.h };
+}
+
+/** 第 kind 类的第 i 颗卫星在 t 秒(动画时间)时的位置;h = 离地几个半径 */
+export function satPoint(kind: number, i: number, t: number): { lon: number; lat: number; h: number } {
+  if (kind === 1) {
+    const v = Math.sin(i * 91.3458 + 17.17 + 47.853) * 24634.6345;
+    return { lon: ((i * 137.508 + 23) % 360) - 180, lat: 0.3 * (v - Math.floor(v) - 0.5), h: 5.62 };
+  }
+  const o = satOrbit(kind, i);
+  return satPathPoint(o, o.u0 + o.w * t);
 }
 
 /** 第六十六轮:被碎片打断的太空电梯(锚点州)—— 断开到重建完成(解封 + 3 年)这段时间里不画 */
