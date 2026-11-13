@@ -13,3 +13,9 @@ for (const [i, c] of P.calls.entries()) {
 }
 const s = JSON.stringify(P).match(/- 时代:[^"]*/);
 console.log(s ? s[0].slice(0, 300) : '没有"时代"一条');
+// 第八十轮:〔同类事〕
+for (const [i, c] of P.calls.entries()) {
+  const t = JSON.stringify(c);
+  const m = t.match(/〔同类事〕.这一段[^〔]*/);
+  if (m) console.log(`第 ${i + 1} 次 同类事:`, m[0].replace(/\n/g, '\n').slice(0, 700));
+}

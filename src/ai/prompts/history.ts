@@ -1246,7 +1246,8 @@ export const SYSTEM_PROMPT = [
   '必须遵守:',
   '1. 史实以材料为准,不得改动:年份、国名(用当年的国号)、人名、族名、地名、战争的胜负与得失、国家的兴亡和先后顺序。',
   '2. 年份照材料写成"第 1288 年"这样的阿拉伯数字,每处都带"第"(不要写成"第一千二百八十八年""千二百八十八年"),不要换算成干支、公元、世纪或别的纪年;' +
-    '不要写"三十年后""又六十六年"这类推算出来的年数,直接写年份。补写的细节不要另编年份:材料里没有的年份不要出现。',
+    '不必每件事都写年份:一段写一个时期或一件事的来龙去脉,段首点出年份,段里可以用"同年""此后""不久""其间"接上;' +
+    '但不要写"三十年后""又六十六年"这类推算出来的具体年数。补写的细节不要另编年份:材料里没有的年份不要出现。',
   '3. 战事照材料写:得几州就是几州,"得某州"不等于灭国,材料没写亡的国家就还在;材料写了洗劫、纵兵大掠、夷为平地、毁城,就不要写成秋毫无犯、开仓放粮;' +
     '"某王朝兴""某某起于某地代之""权臣某某废某某自立"是改朝换代,不是父死子继;国家升格、称帝要等到材料里写的那一年。',
   '4. 材料里写到的人物(君主、统帅、叛将、权臣)照材料写:谁在位、谁领兵、谁亲征、谁战死、谁出降,都不改,也不要张冠李戴。' +
@@ -1425,7 +1426,65 @@ function contextParts(civ: Civ, info: ScopeInfo, book: ScopeInfo, picked: Set<Ch
   return { overview, geography, cultures: cuLines.join('\n'), polities: polLines.join('\n'), situation, era: eraText(civ, clip.to, clip.from) };
 }
 
-function materialText(parts: Parts, chron: string, dropped: number, chapter = '', clipTo?: Year, people = ''): string {
+/** 第八十轮:〔同类事〕统计哪几种(编年史条目的 kind → 叫法) */
+const TALLY_KINDS: Readonly<Record<string, string>> = {
+  war: '战争',
+  plague: '疫病',
+  famine: '饥荒',
+  nuke: '核试验、动用核武',
+  split: '分裂、独立',
+  merge: '加入、并入',
+  fall: '亡国、灭国',
+  warlord: '军阀割据',
+  assimilate: '同化',
+  council: '议政、立宪',
+  submit: '称臣、成为保护国',
+  ruin: '毁城',
+  migrate: '迁徙',
+  marry: '联姻',
+  alliance: '结盟',
+  decline: '旧都衰落',
+  regent: '摄政、还政',
+};
+const TALLY_MIN = 3;
+const TALLY_YEARS = 6;
+
+/** 条目正文里的死亡人数(编年史写"死亡约 24 万人""共死亡约 1.2 亿人";"数千人"不算),单位人;没有 = 0 */
+function deathsIn(text: string): number {
+  const m = text.match(/死亡约\s*([\d.]+)\s*(万|亿)?人/);
+  if (!m) return 0;
+  return Number(m[1]) * (m[2] === '亿' ? 1e8 : m[2] === '万' ? 1e4 : 1);
+}
+
+/**
+ * 第八十轮:〔同类事〕—— 这一段里出现 TALLY_MIN 次以上的同类事:次数、年份(最多 TALLY_YEARS 个)、疫病 / 饥荒的死亡合计。
+ * 统计全部条目(不只挑进材料的),让 AI 能合起来写"此后两百年间大疫五起"而不用自己数
+ */
+function tallyText(entries: readonly ChronicleEntry[]): string {
+  const g = new Map<string, ChronicleEntry[]>();
+  for (const e of entries) {
+    if (!TALLY_KINDS[e.kind]) continue;
+    let l = g.get(e.kind);
+    if (!l) g.set(e.kind, (l = []));
+    l.push(e);
+  }
+  const rows = [...g].filter(([, l]) => l.length >= TALLY_MIN).sort((a, b) => b[1].length - a[1].length);
+  return rows
+    .map(([k, l]) => {
+      // 同一年的几条(一次核交换、一次分裂出好几国)只算一个年份;年份不多的逐个列,多的写起止
+      const ys = [...new Set(l.map((e) => Y(e.year)))];
+      const yt = `${ys.length * 2 <= l.length ? `分在 ${ys.length} 个年份,` : ''}${ys.length <= TALLY_YEARS ? `第 ${ys.join('、')} 年` : `第 ${ys[0]}—${ys[ys.length - 1]} 年间`}`;
+      let dead = '';
+      if (k === 'plague' || k === 'famine') {
+        const d = l.reduce((t, e) => t + deathsIn(e.text), 0);
+        if (d >= 1e4) dead = `,合计死亡约 ${d >= 1e8 ? `${Math.round(d / 1e7) / 10} 亿` : `${Math.round(d / 1e4)} 万`}人`;
+      }
+      return `- ${TALLY_KINDS[k]} ${l.length} 次(${yt})${dead}`;
+    })
+    .join('\n');
+}
+
+function materialText(parts: Parts, chron: string, dropped: number, chapter = '', clipTo?: Year, people = '', tally = ''): string {
   const out = [
     `【材料】(推演生成的史实,以此为准。★ = 大事;战争下面缩进的是战事细节${dropped > 0 ? `;篇幅所限,略去了${cnNumber(dropped)}条(多是小事和战事细节)` : ''})`,
     '',
@@ -1441,13 +1500,26 @@ function materialText(parts: Parts, chron: string, dropped: number, chapter = ''
   if (parts.situation) out.push('', '〔格局〕(当时各国的大小和国都)', parts.situation);
   if (parts.era) out.push('', '〔时代〕(这一段结束时世上已经有的东西;写近现代的事按这个补细节)', parts.era);
   if (people) out.push('', '〔人物〕(列传可用的统帅、名臣:生卒年照这里写;每一仗写的是"攻方、守方 → 结果",攻守和结果不能改)', people);
+  if (tally) out.push('', '〔同类事〕(这一段里反复出现的事;写的时候合起来写,不要逐条复述)', tally);
   out.push('', `〔编年史〕${chapter}`, chron || '- (这段时间没有记下什么事)');
   return out.join('\n');
 }
 
 /** 写作要求里的"取舍"一条 */
-const CHOOSE =
-  '- 取舍:以 ★ 大事为骨架,挑能说明因果的小事写,其余一笔带过或略去;不要逐条复述编年史,要写成连贯的叙述;材料里没有的时期就少写,不要硬凑';
+/** 第八十轮:同类事合写、兵种编制不每仗重复(各文体共用) */
+const MERGE_RULE =
+  '〔同类事〕里反复出现的事(疫病、依约参战、民变、核试验、议政……)合起来写一两句,说次数、年份范围和总的后果,只把其中关键的一两次展开;' +
+  '战事里的兵种编制("三个无人舰艇集群在无人机蜂群掩护下登陆"这类)只在头一回或关键的一仗写,其余的仗写攻守、得失就够了';
+
+/** 写作要求里的"取舍"一条(第八十轮:按文体;用户"这什么流水账") */
+function chooseLine(style: HistoryStyle): string {
+  if (style === 'annals') return `- 取舍:以 ★ 大事为骨架,挑能说明因果的小事写,其余略去;${MERGE_RULE};材料里没有的时期就少写,不要硬凑`;
+  return (
+    '- 取舍:每一章先想清楚这一段的主线(这些年里这个国家 / 天下变了什么,比如从游牧到共和、从扩张到屡败、从对峙到联合),按主线挑事、分段:' +
+    '一段讲一件事或一个时期的来龙去脉,不要一年一段、一件事一段,不要逐条复述编年史;★ 大事是骨架,能说明主线因果的小事展开写,和主线无关的一笔带过或略去;' +
+    `${MERGE_RULE};材料里没有的时期就少写,不要硬凑`
+  );
+}
 
 /** 写作要求里的"笔调"一条(各文体共用) */
 /** 第七十八轮:补细节按时代补(用户"神他妈未来时代的跨境商队");开战由头不另编;事件不挂错人;正文不提"材料" */
@@ -1456,7 +1528,7 @@ export const ERA_RULE =
   '不要写驿马、官仓开仓、商队、木船、宫廷减膳这类古代的东西;开战的由头只写材料里给的(如"因边界争端""为完成全球统一"),不要另编"商队被劫""使节被杀"之类的具体事件;' +
   '一件事只能写到当时在位、在世的人名下,某人即位以前、去世以后的事不要算到他头上;正文里不要出现"材料""记载""数据"这类字眼';
 
-export const TONE = '- 笔调:平实,少用比喻、排比和空泛的抒情;不要每段都发议论,结尾不要升华成大道理;战争写攻守得失,不要渲染杀戮和血腥场面(服务商的内容审核会拦)';
+export const TONE = '- 笔调:平实,少用比喻、排比和空泛的抒情;每章可以有一两句点明因果和走势(为什么由盛转衰、哪件事引出了哪件事),但不要每段都发议论,结尾不要升华成大道理;战争写攻守得失,不要渲染杀戮和血腥场面(服务商的内容审核会拦)';
 
 function styleLine(opts: HistoryOptions): string {
   const s = HISTORY_STYLES[opts.style];
@@ -1514,7 +1586,9 @@ export function buildHistoryPrompts(civ: Civ, opts: HistoryOptions): HistoryProm
     const trial = pickEntries(info.entries, Math.round(L.budget * 0.6));
     // 纪传体带列传:列传可用的人物先占一份(一次写完的列传只写一到四人,少列几个)
     const people = bio ? livesPeopleText(civ, info.from, info.to, trial.picked, subjectId, 4) : '';
-    const budget = L.budget - people.length;
+    // 第八十轮:〔同类事〕也占预算
+    const tally = tallyText(info.entries);
+    const budget = L.budget - people.length - tally.length;
     // 格局:通史写推演结束时,断代史写这一时代开始和结束时;国史不写(别国的大小和它关系不大)
     const snaps = opts.scope.kind === 'world' ? [civ.endYear] : opts.scope.kind === 'era' ? [info.from, info.to] : [];
     const parts = contextParts(civ, info, info, trial.picked, Math.round(budget * 0.4), snaps, whole);
@@ -1545,7 +1619,7 @@ export function buildHistoryPrompts(civ: Civ, opts: HistoryOptions): HistoryProm
       );
     }
     if (people) lines.push(LIVES_RULE);
-    lines.push(CHOOSE, ERA_RULE, TONE);
+    lines.push(chooseLine(opts.style), ERA_RULE, TONE);
     const head = lines.join('\n');
     calls.push({
       title,
@@ -1554,7 +1628,7 @@ export function buildHistoryPrompts(civ: Civ, opts: HistoryOptions): HistoryProm
       maxTokens: L.maxTokens,
       temperature: style.temperature,
       head,
-      body: materialText(parts, chron, dropped, '', clipped ? info.to : undefined, people),
+      body: materialText(parts, chron, dropped, '', clipped ? info.to : undefined, people, tally),
       used: picked.size,
       total,
     });
@@ -1570,7 +1644,9 @@ export function buildHistoryPrompts(civ: Civ, opts: HistoryOptions): HistoryProm
       const trial = pickEntries(inSec, Math.round(L.budget * 0.6));
       // 列传:列传可用的人物(生卒年、逐仗的攻守和结果)先占一份
       const people = s.part === 'lives' ? livesPeopleText(civ, s.from, s.to, trial.picked, subjectId) : '';
-      const budget = L.budget - people.length;
+      // 第八十轮:〔同类事〕也占预算(列传那一篇不给)
+      const tally = s.part === 'lives' ? '' : tallyText(inSec);
+      const budget = L.budget - people.length - tally.length;
       // 格局:按时间分章的通史 / 断代史每章写这一章开始时(第 0 年还没有国家,不写)、最后一章再写结束时;国史、纪传体不写
       const snaps: Year[] = [];
       if (opts.scope.kind !== 'polity' && !s.part) {
@@ -1620,7 +1696,7 @@ export function buildHistoryPrompts(civ: Civ, opts: HistoryOptions): HistoryProm
       if (verdict) angle.push(`"史臣曰"${opts.style === 'annals' ? '(如果有)' : ''}${VERDICTS[((off >> 3) + i) % VERDICTS.length]}`);
       if (angle.length) lines.push(`- 开头和评语:${angle.join(';')}`);
       if (people) lines.push(LIVES_RULE);
-      lines.push(CHOOSE, ERA_RULE, TONE);
+      lines.push(chooseLine(opts.style), ERA_RULE, TONE);
       calls.push({
         title: `${title} · ${label(i)}`,
         chapter: i,
@@ -1628,7 +1704,7 @@ export function buildHistoryPrompts(civ: Civ, opts: HistoryOptions): HistoryProm
         maxTokens: L.maxTokens,
         temperature: style.temperature,
         head: lines.join('\n'),
-        body: materialText(parts, chron, dropped, `(本${uw}:${label(i)}${sliced ? ` ${span(s.from, s.to)}` : ''})`, clip.to < civ.endYear ? clip.to : undefined, people),
+        body: materialText(parts, chron, dropped, `(本${uw}:${label(i)}${sliced ? ` ${span(s.from, s.to)}` : ''})`, clip.to < civ.endYear ? clip.to : undefined, people, tally),
         used: picked.size,
         total,
       });

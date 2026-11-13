@@ -25,7 +25,8 @@
  */
 import { Fragment, useEffect, useRef, useState } from 'react';
 import type { WorldParams } from '../gen/world';
-import { CONT_SLIDERS, SLIDERS, YEARS_NOTE, YEARS_ON, YEARS_SLIDER, YEARS_SWITCH, contBrief, type SliderLike } from './genesisSliders';
+import { CONT_SLIDERS, NEW_WORLD_YEARS, SLIDERS, YEARS_NOTE, YEARS_ON, YEARS_SLIDER, YEARS_SWITCH, contBrief, type SliderLike } from './genesisSliders';
+import { END_YEAR_DEFAULT } from '../gen/edits';
 import { CONT_RESET, ContinentSeg, ParamField, rangeFill } from './ParamField';
 import { createPortal } from 'react-dom';
 import { PresetPicker, SavePreset, type PresetPick } from './PresetPicker';
@@ -158,7 +159,7 @@ function startParams(randomSeed: () => number): {
   const c = choiceParams(getPresets(), getPresets().chosen);
   return {
     params: { ...c.params, seed: c.seed ?? randomSeed() },
-    endYear: c.endYear,
+    endYear: c.endYear ?? NEW_WORLD_YEARS,
     rules: c.rules,
   };
 }
@@ -187,7 +188,9 @@ export function NewWorldDialog(p: NewWorldDialogProps) {
     setParams({ ...c.params, seed });
     setSeedText(String(seed));
     setSeedBad(false);
-    setYears(c.endYear);
+    // 本地分支 modern-pace:预设没写年数 = 默认 5000 年;写了 3000 的 = 关开关
+    const y = c.endYear ?? NEW_WORLD_YEARS;
+    setYears(y > END_YEAR_DEFAULT ? y : undefined);
     setRules(c.rules && rulesUiOn() ? { r: c.rules, preset: true } : p.rules ? { r: p.rules, preset: false } : null);
   };
   /** 拓荒(都是默认 = undefined);「地形难走程度」展开没有 */
@@ -585,7 +588,7 @@ export function NewWorldDialog(p: NewWorldDialogProps) {
   const presetRow = (
     <div className="ps-row nd-preset">
       <span className="ps-l">预设</span>
-      <PresetPicker params={params} endYear={years} rules={rules?.r} onPick={applyPreset} phone={p.phone} saveLink={!p.phone} after={p.phone ? undefined : rulesNote} />
+      <PresetPicker params={params} endYear={years ?? END_YEAR_DEFAULT} rules={rules?.r} onPick={applyPreset} phone={p.phone} saveLink={!p.phone} after={p.phone ? undefined : rulesNote} />
     </div>
   );
 

@@ -12,7 +12,7 @@
 import { createListeners } from './createStore';
 import { PARAM_RANGE } from '../gen/savefile';
 import { DEFAULT_PARAMS, type WorldParams } from '../gen/params';
-import { contBrief } from './genesisSliders';
+import { NEW_WORLD_YEARS, contBrief } from './genesisSliders';
 import { cleanRuleSet, type RuleSet } from '../gen/civ/ruleSet';
 
 /** 预设里的参数:世界参数去掉种子 */
@@ -236,7 +236,8 @@ export function rememberLast(params: WorldParams, endYear: number | undefined, t
 export function sameAsChoice(s: PresetState, c: PresetChoice, p: WorldParams, endYear: number | undefined): boolean {
   const ch = choiceParams(s, c);
   if (ch.seed && ch.seed !== p.seed) return false;
-  if ((ch.endYear ?? 0) !== (endYear ?? 0)) return false;
+  // 本地分支 modern-pace:没写年数 = 新建世界的默认(NEW_WORLD_YEARS);对话框里关了开关的明写 3000(NewWorldDialog)
+  if ((ch.endYear ?? NEW_WORLD_YEARS) !== (endYear ?? NEW_WORLD_YEARS)) return false;
   return (Object.keys(ch.params) as (keyof PresetParams)[]).every((k) => ch.params[k] === p[k]);
 }
 
