@@ -17,6 +17,8 @@
 import type { Civ, Person, Polity, Year } from '../../gen/civ/types';
 import { buildChronicle, cnNumber, entryInvolves, entryYearLabel, mergeChronicle, yearText, type ChronicleEntry } from '../../gen/civ/story/chronicle';
 import { fullChronicle } from '../../gen/civ/story/religionText';
+import { spaceEntries } from '../../gen/civ/story/spaceText';
+import { colonyEntries } from '../../gen/civ/story/colonies';
 import { capitalAt, polityName, polityTierAt, ownersAt } from '../../gen/readers/openQuery';
 import { dynastyTitle, polityShortTitle, polityTitleChain } from '../../gen/civ/growth';
 import { KIND_INFO, cultureLabel, regionLabel, regionNamed } from '../../gen/civ/story/display';
@@ -138,7 +140,8 @@ export interface HistoryLengthSpec {
 export const HISTORY_LENGTHS: Record<HistoryLength, HistoryLengthSpec> = {
   short: { label: '短', chars: 800, budget: 4000, maxTokens: 3000, split: 'none', chapters: [1, 1] },
   medium: { label: '中', chars: 2000, budget: 9000, maxTokens: 6000, split: 'inline', chapters: [4, 3] },
-  long: { label: '长', chars: 5000, budget: 7000, maxTokens: 5000, split: 'calls', chapters: [4, 3] },
+  // 本地分支 modern-pace 第八十二轮:写作要求加长了(技术与社会、求实),材料 7000 → 6800,一次调用的输入仍在一万二千字以内
+  long: { label: '长', chars: 5000, budget: 6800, maxTokens: 5000, split: 'calls', chapters: [4, 3] },
   k3: { label: '短', chars: 3000, budget: 9000, maxTokens: 7000, split: 'inline', chapters: [3, 3] },
   k10: { label: '中', chars: 10000, budget: 8000, maxTokens: 6000, split: 'calls', chapters: [5, 5] },
   k30: { label: '长', chars: 30000, budget: 8000, maxTokens: 7000, split: 'calls', chapters: [12, 10] },
@@ -362,6 +365,21 @@ interface ScopeInfo {
 /** 第八十一轮:完整编年史里并进材料的几类(重要度 ≥ 2;插件写的都要);时代、科学史放〔技术与社会〕,商道、城市改名不进 */
 const EXTRA_KINDS: ReadonlySet<string> = new Set(['thought', 'faith', 'debris', 'partition', 'plugin']);
 const matCache = new WeakMap<Civ, ChronicleEntry[]>();
+const spaceCache = new WeakMap<Civ, ChronicleEntry[]>();
+
+/**
+ * 第八十三轮:航天面板的条目(太空任务 + 殖民地),按年份;编号另起(史事 × 4 + 12_000_000 起),不和编年史撞。
+ * 只到 civ.endYear
+ */
+function spaceMaterial(civ: Civ): ChronicleEntry[] {
+  const hit = spaceCache.get(civ);
+  if (hit) return hit;
+  const base = (civ.annals?.length ?? 0) * 4 + 12_000_000;
+  const a = spaceEntries(civ, base);
+  const out = [...a, ...colonyEntries(civ, base + a.length)].filter((e) => e.year <= civ.endYear).sort((x, y) => x.year - y.year || x.id - y.id);
+  spaceCache.set(civ, out);
+  return out;
+}
 
 /**
  * 第八十一轮:写史书的纪事 = 史事(buildChronicle)+ 完整编年史(fullChronicle)里的思潮、宗教、轨道、瓜分无主地、插件。
@@ -371,7 +389,9 @@ function materialChronicle(civ: Civ): ChronicleEntry[] {
   const hit = matCache.get(civ);
   if (hit) return hit;
   const extra = fullChronicle(civ).filter((e) => EXTRA_KINDS.has(e.kind) && e.year <= civ.endYear && (e.importance >= 2 || e.kind === 'plugin'));
-  const out = mergeChronicle(buildChronicle(civ), extra);
+  // 第八十三轮:航天任务、殖民地的重要度 2 并进来(重要度 3 的放〔技术与社会〕)
+  const space = spaceMaterial(civ).filter((e) => e.importance === 2);
+  const out = mergeChronicle(mergeChronicle(buildChronicle(civ), extra), space);
   matCache.set(civ, out);
   return out;
 }
@@ -1419,7 +1439,9 @@ function techText(civ: Civ, clip: Clip, subject: Polity | null, max = TECH_MAX):
   });
   const rank = (e: ChronicleEntry) => e.importance * 2 + (e.kind === 'science' ? 1 : 0);
   const keep = new Set([...cand].sort((a, b) => rank(b) - rank(a) || a.year - b.year).slice(0, max));
-  for (const e of cand) if (keep.has(e)) lines.push(`- ${e.importance >= 3 ? '★' : ''}${entryYearLabel(e)} ${e.text}`);
+  // 第八十三轮:航天大事(第一颗卫星、登月、太空电梯、火星定居、同步轨道环……)一定列,不占发明的名额
+  const space = spaceMaterial(civ).filter((e) => e.importance >= 3 && Y(e.year) >= from && Y(e.year) <= to);
+  for (const e of mergeChronicle(cand.filter((x) => keep.has(x)), space)) lines.push(`- ${e.importance >= 3 ? '★' : ''}${entryYearLabel(e)} ${e.text}`);
   if (cand.length > keep.size) lines.push(`- (另有${cnNumber(cand.length - keep.size)}项发明、发现从略)`);
   for (const a of h.annals) {
     if (a.kind !== 'orbit' || a.n !== 1 || a.year > clip.to) continue;
@@ -1473,8 +1495,10 @@ const TALLY_KINDS: Readonly<Record<string, string>> = {
   war: '战争',
   plague: '疫病',
   famine: '饥荒',
-  nuke: '动用核武、军控',
   'nuke-test': '核试验',
+  'nuke-use': '核交换',
+  'nuke-arms': '核军控条约',
+  'nuke-winter': '核冬天',
   split: '分裂、独立',
   merge: '加入、并入',
   fall: '亡国、灭国',
@@ -1491,6 +1515,8 @@ const TALLY_KINDS: Readonly<Record<string, string>> = {
 };
 const TALLY_MIN = 3;
 const TALLY_YEARS = 6;
+/** 第八十二轮:〔同类事〕最多几行 */
+const TALLY_ROWS = 14;
 
 /** 条目正文里的死亡人数(编年史写"死亡约 24 万人""共死亡约 1.2 亿人";"数千人"不算),单位人;没有 = 0 */
 function deathsIn(text: string): number {
@@ -1527,28 +1553,61 @@ function warCauses(l: readonly ChronicleEntry[]): string {
   return xs.length ? `;其中${xs.map(([c, k]) => `${c} ${k} 次`).join('、')}` : '';
 }
 
-function tallyText(entries: readonly ChronicleEntry[]): string {
+/** 第八十二轮:〔同类事〕的分类(核武按正文拆四项:核试验、核交换、军控条约、核冬天) */
+function tallyKey(e: ChronicleEntry): string {
+  if (e.kind !== 'nuke') return e.kind;
+  if (e.text.includes('核试验')) return 'nuke-test';
+  if (e.text.includes('核冬天')) return 'nuke-winter';
+  if (e.text.includes('削减') || e.text.includes('条约')) return 'nuke-arms';
+  return 'nuke-use';
+}
+
+function groupTally(entries: readonly ChronicleEntry[]): Map<string, ChronicleEntry[]> {
   const g = new Map<string, ChronicleEntry[]>();
   for (const e of entries) {
-    // 第八十一轮:核试验和动用核武分开数
-    const key = e.kind === 'nuke' && e.text.includes('核试验') ? 'nuke-test' : e.kind;
+    const key = tallyKey(e);
     if (!TALLY_KINDS[key]) continue;
     let l = g.get(key);
     if (!l) g.set(key, (l = []));
     l.push(e);
   }
-  const rows = [...g].filter(([, l]) => l.length >= TALLY_MIN).sort((a, b) => b[1].length - a[1].length);
+  return g;
+}
+
+/** 一类事算几次:核交换一次记好几条(每一处核打击一条),按年份算;别的按条 */
+function tallyCount(k: string, l: readonly ChronicleEntry[]): number {
+  return k === 'nuke-use' ? new Set(l.map((e) => Y(e.year))).size : l.length;
+}
+
+/**
+ * prior = 全书在这一章以前的条目(分章写时 AI 看不到前面各章的材料,不知道就会写"第一次"):每项补"此前已有 N 次";
+ * 这一章不到 TALLY_MIN 次、但此前有过的也列出来
+ */
+function tallyText(entries: readonly ChronicleEntry[], prior: readonly ChronicleEntry[] = []): string {
+  const g = groupTally(entries);
+  const before = groupTally(prior);
+  // 核武、疫病一定列(最容易被写成"第一次""仅有"),别的按次数补满 TALLY_ROWS 行
+  const pin = (k: string) => k.startsWith('nuke') || k === 'plague';
+  const all = [...g]
+    .filter(([k, l]) => tallyCount(k, l) >= TALLY_MIN || (before.get(k)?.length ?? 0) > 0 || pin(k))
+    .sort((a, b) => tallyCount(b[0], b[1]) - tallyCount(a[0], a[1]));
+  const pinned = all.filter(([k]) => pin(k));
+  const keep = new Set([...pinned, ...all.filter(([k]) => !pin(k)).slice(0, Math.max(0, TALLY_ROWS - pinned.length))]);
+  const rows = all.filter((r) => keep.has(r));
   return rows
     .map(([k, l]) => {
+      const pb = before.get(k);
+      const prev = pb ? `;此前已有 ${tallyCount(k, pb)} 次` : '';
+      const n = tallyCount(k, l);
       // 同一年的几条(一次核交换、一次分裂出好几国)只算一个年份;年份不多的逐个列,多的写起止
       const ys = [...new Set(l.map((e) => Y(e.year)))];
-      const yt = `${ys.length * 2 <= l.length ? `分在 ${ys.length} 个年份,` : ''}${ys.length <= TALLY_YEARS ? `第 ${ys.join('、')} 年` : `第 ${ys[0]}—${ys[ys.length - 1]} 年间`}`;
+      const yt = `${k !== 'nuke-use' && ys.length * 2 <= l.length ? `分在 ${ys.length} 个年份,` : ''}${ys.length <= TALLY_YEARS ? `第 ${ys.join('、')} 年` : `第 ${ys[0]}—${ys[ys.length - 1]} 年间`}`;
       let dead = '';
       if (k === 'plague' || k === 'famine') {
         const d = l.reduce((t, e) => t + deathsIn(e.text), 0);
         if (d >= 1e4) dead = `,合计死亡约 ${d >= 1e8 ? `${Math.round(d / 1e7) / 10} 亿` : `${Math.round(d / 1e4)} 万`}人`;
       }
-      return `- ${TALLY_KINDS[k]} ${l.length} 次(${yt}${k === 'war' ? warCauses(l) : ''})${dead}`;
+      return `- ${TALLY_KINDS[k]} ${n} 次(${yt}${k === 'war' ? warCauses(l) : ''}${prev})${dead}`;
     })
     .join('\n');
 }
@@ -1587,8 +1646,9 @@ const TECH_RULE =
 
 /** 第八十一轮:"求实"一条(不倒叙、不编"第一次"、补写言行不冒充史书、不推方位和年数、结尾不抄清单) */
 export const FACT_RULE =
-  '- 求实:按年份先后写,不要倒回去写更早的年份;材料没写的"第一次""唯一""第几次"不要写;补写的言行不要冒充"史书记载";' +
-  '材料没写的方位、相隔年数不要自己推;结尾写到最后一年的实情就收住,不要整串抄〔技术与社会〕的清单';
+  '- 求实:段内按年份先后写;换题材另起一段可回到本章早些的年份,要用"同一时期""与此同时"点明,不要用"到""此后"接更早的年份;不写本章范围以外的事;' +
+  '"第一次""最早""唯一""仅有""罕见""第几次"只照材料写(分章时前面的事看不全,见〔同类事〕的"此前已有");' +
+  '补写的言行不要冒充"史书记载";材料没写的方位、相隔年数不要自己推;结尾写到最后一年的实情就收住,不要整串抄〔技术与社会〕的清单';
 
 function chooseLine(style: HistoryStyle): string {
   if (style === 'annals') return `- 取舍:以 ★ 大事为骨架,挑能说明因果的小事写,其余略去;发明、科学的大事也按年记进去;${MERGE_RULE};材料里没有的时期就少写,不要硬凑`;
@@ -1603,7 +1663,7 @@ function chooseLine(style: HistoryStyle): string {
 /** 第七十八轮:补细节按时代补(用户"神他妈未来时代的跨境商队");开战由头不另编;事件不挂错人;正文不提"材料" */
 export const ERA_RULE =
   '- 时代:细节只能按当时的时代补,〔技术与社会〕里列着那时世上已经有和新出现的东西 —— 近现代以后的救灾、调兵、通商写铁路、航空、电网、管道、配给、空运、医疗队、无人机、卫星、轨道货运这些,' +
-  '不要写驿马、官仓开仓、商队、木船、宫廷减膳这类古代的东西;开战的由头只写材料里给的(如"因边界争端""为完成全球统一"),不要另编"商队被劫""使节被杀"之类的具体事件;' +
+  '不要写驿马、官仓开仓、商队、木船、宫廷减膳这类古代的东西,文言体里无人机、导弹、卫星也照实写;开战的由头只写材料里给的(如"因边界争端""为完成全球统一"),不要另编"商队被劫""使节被杀"之类的具体事件;' +
   '一件事只能写到当时在位、在世的人名下,某人即位以前、去世以后的事不要算到他头上;正文里不要出现"材料""记载""数据"这类字眼';
 
 export const TONE = '- 笔调:平实,少用比喻、排比和空泛的抒情;每章可以有一两句点明因果和走势(为什么由盛转衰、哪件事引出了哪件事),但不要每段都发议论,结尾不要升华成大道理;战争写攻守得失,不要渲染杀戮和血腥场面(服务商的内容审核会拦)';
@@ -1723,7 +1783,7 @@ export function buildHistoryPrompts(civ: Civ, opts: HistoryOptions): HistoryProm
       // 列传:列传可用的人物(生卒年、逐仗的攻守和结果)先占一份
       const people = s.part === 'lives' ? livesPeopleText(civ, s.from, s.to, trial.picked, subjectId) : '';
       // 第八十轮:〔同类事〕也占预算(列传那一篇不给)
-      const tally = s.part === 'lives' ? '' : tallyText(inSec);
+      const tally = s.part === 'lives' ? '' : tallyText(inSec, info.entries.filter((e) => e.year < s.from));
       const budget = L.budget - people.length - tally.length;
       // 格局:按时间分章的通史 / 断代史每章写这一章开始时(第 0 年还没有国家,不写)、最后一章再写结束时;国史、纪传体不写
       const snaps: Year[] = [];

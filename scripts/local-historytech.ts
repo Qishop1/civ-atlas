@@ -13,7 +13,7 @@ for (const [i, c] of P.calls.entries()) {
 〔${name}〕`); if (k < 0) return ''; const e = b.indexOf('\n\n〔', k + 2); return b.slice(k, e < 0 ? undefined : e); };
   console.log(`\n==== 第 ${i + 1} 次  材料 ${b.length} 字`);
   console.log(sec('技术与社会').slice(0, 1400));
-  console.log(sec('同类事').split('\n').slice(0, 4).join('\n'));
+  console.log(sec('同类事'));
   const chron = sec('编年史');
   console.log('编年史里 思潮/宗教 条数:', (chron.match(/之说|创立|皈依|立为国教/g) ?? []).length);
 }
