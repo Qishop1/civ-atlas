@@ -32,7 +32,7 @@ import { useAiOn } from '../ai/client';
 import { ToolsButton } from './plugins/entry';
 import './book.css';
 import { homeworldOf } from '../gen/civ/homeworld';
-import { enterSystemView, exitSystemView, setMoonGlobe, setMoonView, setNight, toggleSpacePanel, useSpaceUi, useUnlocks } from './spaceStore';
+import { enterSystemView, exitSystemView, setMoonGlobe, setMoonView, setNight, setTerm, toggleSpacePanel, useSpaceUi, useUnlocks } from './spaceStore';
 
 // 左上的旧版 / 测试版标记单独一个文件(我的世界页也用,不带上这里的地图按钮)
 export { OldSiteBadge } from './OldSiteBadge';
@@ -125,6 +125,18 @@ function NightButton({ civ }: { civ: Civ | null }) {
     <button className={`glass mc-btn mc-globe${night ? ' on' : ''}`} data-act="night" aria-pressed={night} onClick={() => setNight(!night)} title={night ? '回到白天' : '夜景:城市灯光,发达、人多的地方亮'}>
       <Icon name="globe" size={18} />
       <span>{night ? '白天' : '夜景'}</span>
+    </button>
+  );
+}
+
+/** 第八十八轮:真实晨昏线开关(地球仪上才有) */
+function TermButton({ globeOn }: { globeOn: boolean }) {
+  const { term, night } = useSpaceUi();
+  if (!globeOn || night) return null;
+  return (
+    <button className={`glass mc-btn mc-globe${term ? ' on' : ''}`} data-act="term" aria-pressed={term} onClick={() => setTerm(!term)} title={term ? '关掉晨昏线(整颗星球都是白天)' : '晨昏线:太阳照不到的半边是夜里,有了电力以后城市亮灯'}>
+      <Icon name="globe" size={18} />
+      <span>晨昏</span>
     </button>
   );
 }
@@ -331,6 +343,7 @@ export function MapControls({
       )}
       {tools && <ToolsButton />}
       <NightButton civ={civ} />
+      <TermButton globeOn={globeOn} />
       <MoonButton civ={civ} />
       <GlobeToggle globeOn={globeOn} onToggleGlobe={onToggleGlobe} civ={civ} />
       {zoom && (

@@ -41,6 +41,8 @@ export interface CityLayerProps {
   hidden?: boolean;
   /** 第六十九轮:地球仪上 —— 城区贴图交给球的着色器画(ui/globeCity.ts),这一层只画街道 */
   globe?: boolean;
+  /** 第八十八轮:地球仪白天模式下另烘一份夜景灯光(晨昏线开着、有了电力以后) */
+  nightLights?: boolean;
 }
 
 /** 像素的整数哈希 → [0, 1) */
@@ -51,7 +53,7 @@ const ph = (x: number, y: number) => {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 };
 
-export function CityLayer({ civ, world, raster, toClient, urban, night, hidden, globe }: CityLayerProps) {
+export function CityLayer({ civ, world, raster, toClient, urban, night: nightIn, hidden, globe, nightLights }: CityLayerProps) {
   const ok = !!civ && civ.viable && civ.settlements.length > 0;
   const data = useMemo(() => {
     if (!ok) return null;
@@ -128,10 +130,14 @@ export function CityLayer({ civ, world, raster, toClient, urban, night, hidden, 
   const canvas = useRef<HTMLCanvasElement | null>(null);
   const ccanvas = useRef<HTMLCanvasElement | null>(null);
   const tcanvas = useRef<HTMLCanvasElement | null>(null);
-  const show = !hidden && ok && (urban || night);
+  // 第八十八轮:晨昏线的灯光也要这一层烘(底图不是卫星、白模时只烘灯光)
+  const lights = !!globe && !!nightLights && !nightIn;
+  const show = !hidden && ok && (urban || nightIn || lights);
 
   useEffect(() => {
     if (!show || !data) return;
+    // 第八十八轮:烘焙里按它分昼夜;另烘夜景灯光时临时切成 true
+    let night = nightIn;
     let raf = 0;
     let sig = '';
     let texKey = '';
@@ -198,6 +204,8 @@ export function CityLayer({ civ, world, raster, toClient, urban, night, hidden, 
     let rivMask: Uint8Array | null = null;
     /** 白天城区挖掉河道的一份(地球仪 / 弯边投影用:那里没有叠在城区上面的河) */
     let texM: HTMLCanvasElement | null = null;
+    /** 第八十八轮:夜景灯光(晨昏线夜里那半边;lights 时才有) */
+    let texN: HTMLCanvasElement | null = null;
     let maskCv: HTMLCanvasElement | null = null;
     let texMDirty = true;
     const maskedTex = () => {
@@ -893,19 +901,33 @@ export function CityLayer({ civ, world, raster, toClient, urban, night, hidden, 
       const year = getCivTime().year ?? c.endYear;
       // 播放时每 10 年重算一次贴图(每年一次很卡),停下来再按那一年
       const playing = getCivTime().playing;
-      const tk = `${playing ? Math.floor(year / 10) * 10 : Math.floor(year)}|${night}|${playing ? 'p' : 's'}`;
+      const tk = `${playing ? Math.floor(year / 10) * 10 : Math.floor(year)}|${night}|${lights}|${playing ? 'p' : 's'}`;
       const p0 = tc(world.width * 0.25, world.height * 0.5),
         p1 = tc(world.width * 0.75, world.height * 0.3);
       const s = `${tk}|${p0?.map((v) => v.toFixed(1))}|${p1?.map((v) => v.toFixed(1))}|${rect.width}x${rect.height}|${urban}`;
       if (s === sig) return;
       sig = s;
       if (tk !== texKey) {
-        bake(year);
+        // 第八十八轮:先按夜景烘一遍、拷进 texN,再按白天烘(留下的状态照旧是白天);底图不画城区时只要灯光
+        if (lights) {
+          night = true;
+          bake(year);
+          if (!texN) {
+            texN = document.createElement('canvas');
+            texN.width = tex.width;
+            texN.height = tex.height;
+          }
+          const ng = texN.getContext('2d')!;
+          ng.clearRect(0, 0, texN.width, texN.height);
+          ng.drawImage(tex, 0, 0);
+          night = false;
+        }
+        if (urban || night) bake(year);
         texKey = tk;
         // 城区换了:城区上面的河要按新城区重画
         rvForce = true;
         // 第六十九轮:地球仪上贴图交给球画(白天用挖过河道的那份)
-        if (globe) setGlobeCity(night ? tex : maskedTex(), night ? 2 : 1);
+        if (globe) setGlobeCity(night ? tex : urban ? maskedTex() : null, night ? 2 : 1, lights ? texN : null);
       }
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       if (cv.width !== Math.round(rect.width * dpr) || cv.height !== Math.round(rect.height * dpr)) {
@@ -1201,12 +1223,12 @@ export function CityLayer({ civ, world, raster, toClient, urban, night, hidden, 
       clearTimeout(rvTimer);
       if (globe) setGlobeCity(null, 0);
     };
-  }, [show, data, world, raster, toClient, urban, night, globe]);
+  }, [show, data, world, raster, toClient, urban, nightIn, globe, lights]);
   if (!show) return null;
   return (
     <>
-      <canvas ref={ccanvas} className="wonder-layer" aria-hidden="true" style={!globe && !night ? { mixBlendMode: 'soft-light' } : undefined} />
-      <canvas ref={tcanvas} className="wonder-layer" aria-hidden="true" style={!globe && !night ? { mixBlendMode: 'color' } : undefined} />
+      <canvas ref={ccanvas} className="wonder-layer" aria-hidden="true" style={!globe && !nightIn ? { mixBlendMode: 'soft-light' } : undefined} />
+      <canvas ref={tcanvas} className="wonder-layer" aria-hidden="true" style={!globe && !nightIn ? { mixBlendMode: 'color' } : undefined} />
       <canvas ref={canvas} className="wonder-layer" aria-hidden="true" />
     </>
   );

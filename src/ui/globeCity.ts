@@ -6,12 +6,14 @@
  */
 type Listener = () => void;
 
-export const globeCity: { src: HTMLCanvasElement | null; mode: number; ver: number } = { src: null, mode: 0, ver: 0 };
+export const globeCity: { src: HTMLCanvasElement | null; mode: number; ver: number; night: HTMLCanvasElement | null } = { src: null, mode: 0, ver: 0, night: null };
 const subs = new Set<Listener>();
 
-export function setGlobeCity(src: HTMLCanvasElement | null, mode: number): void {
+/** night = 第八十八轮:白天模式下另烘的夜景灯光(晨昏线开着时夜里那半边亮;没有 = null) */
+export function setGlobeCity(src: HTMLCanvasElement | null, mode: number, night: HTMLCanvasElement | null = null): void {
   globeCity.src = src;
   globeCity.mode = src ? mode : 0;
+  globeCity.night = night;
   globeCity.ver++;
   subs.forEach((f) => f());
 }
@@ -21,6 +23,16 @@ export function subscribeGlobeCity(f: Listener): () => void {
   return () => {
     subs.delete(f);
   };
+}
+
+/** 第八十八轮:真实晨昏线开没开(地球仪按它画;太阳直射点固定在 SUN) */
+export const SUN: [number, number] = [0, 12];
+export const globeSun: { on: boolean } = { on: true };
+export function setGlobeSun(on: boolean): void {
+  if (globeSun.on === on) return;
+  globeSun.on = on;
+  globeCity.ver++;
+  subs.forEach((f) => f());
 }
 
 /** 第七十四轮:核痕贴图(槽位 scar;着色器里正片叠底)。null = 不画 */

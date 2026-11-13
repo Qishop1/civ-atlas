@@ -318,6 +318,10 @@ export interface GlobeLook {
   city?: number;
   /** 第七十四轮:核痕贴图(槽位 scar,正片叠底):0 不画、1 画 */
   scar?: number;
+  /** 第八十八轮:真实晨昏线 —— 太阳直射点 [经度, 纬度](度;不给 = 照旧按屏幕方向打光) */
+  sun?: [number, number];
+  /** 第八十八轮:夜景灯光贴图(槽位 cityN):1 = 晨昏线开着时夜里那半边亮灯 */
+  cityN?: number;
 }
 
 /** 背景色(导出、CPU 画法、CSS 共用) */
@@ -364,6 +368,11 @@ uniform sampler2D uCity;
 uniform float uCityMode;
 uniform sampler2D uScar;
 uniform float uScarOn;
+// 第八十八轮:真实晨昏线 —— 太阳方向(地理坐标,和 p 同一套)、开没开;夜景灯光贴图
+uniform vec3 uSun;
+uniform float uTerm;
+uniform sampler2D uCityN;
+uniform float uCityNOn;
 // 云:x 浓淡(0 = 不画)、y 云层比地面多转的角度、z 秒、w 边缘细碎程度
 uniform vec4 uCloudP;
 uniform float uRelief;
@@ -509,9 +518,10 @@ vec3 background(vec2 px, vec2 d, float r) {
   }
   // 星空的细颗粒(宇宙尘埃)
   bg += (hash12(floor(q * 1.3)) - 0.5) * 0.028 + vnoise(q * 0.004) * 0.012;
-  // 大气光晕:只有朝着光的一侧有,窄而亮;背光那边不发光
+  // 大气光晕:只有朝着光的一侧有,窄而亮;背光那边不发光(第八十八轮:开了晨昏线朝太阳那侧)
   if (r > 1.0) {
-    float side = smoothstep(-0.15, 0.85, dot(normalize(d), normalize(L.xy)));
+    vec2 ls = uTerm > 0.5 ? vec2(dot(uSun, uE), dot(uSun, uN)) : L.xy;
+    float side = smoothstep(-0.15, 0.85, dot(normalize(d), normalize(ls + vec2(1e-5))));
     float g = exp(-(r - 1.0) * 38.0) * 0.5 * side + exp(-(r - 1.0) * 13.0) * 0.1 * side;
     bg += vec3(0.28, 0.54, 1.0) * g;
   }
@@ -583,6 +593,7 @@ void main() {
       if (sk.a > 0.002) c *= mix(vec3(1.0), sk.rgb / sk.a, sk.a);
     }
     float cloudA = 0.0;
+    float dayK = 1.0;
     vec4 cv = textureGrad(uCiv, st, gx, gy);
     c = c * (1.0 - cv.a) + cv.rgb;
     vec4 sv = textureGrad(uSel, st, gx, gy);
@@ -622,12 +633,16 @@ void main() {
         cloudA = ca;
       }
       // 背光面压暗(最暗约两成),分界线是一条渐变
-      c *= 0.2 + 0.82 * lit;
+      // 第八十八轮:开了晨昏线 —— 按这一点和太阳的夹角分昼夜(夜里约 0.13,分界带宽约 12°),原来的屏幕光照只留一点立体感
+      if (uTerm > 0.5) {
+        dayK = smoothstep(-0.07, 0.14, dot(p, uSun));
+        c *= mix(0.13, 1.0, dayK) * (0.88 + 0.16 * lit);
+      } else c *= 0.2 + 0.82 * lit;
       vec3 H = normalize(L + vec3(0.0, 0.0, 1.0));
       // 海面反光:一片柔和的亮光(不是一个刺眼的小白点);云下面没有
-      c += vec3(1.0, 0.96, 0.88) * pow(max(dot(N, H), 0.0), 26.0) * 0.16 * water * (1.0 - ca);
+      c += vec3(1.0, 0.96, 0.88) * pow(max(dot(N, H), 0.0), 26.0) * 0.16 * water * (1.0 - ca) * dayK;
       // 大气:只有被照亮的那一侧球边有一圈蓝,背光那边不发光
-      float sideL = smoothstep(-0.05, 0.55, ndl);
+      float sideL = uTerm > 0.5 ? dayK : smoothstep(-0.05, 0.55, ndl);
       c = mix(c, vec3(0.42, 0.66, 1.0), pow(rim, 2.6) * 0.62 * sideL);
     } else if (uStyle == 1) {
       c *= 0.84 + 0.22 * diff;
@@ -643,6 +658,8 @@ void main() {
 
     // 第六十九轮:夜景 —— 球整体压暗(像月光下),城区的灯按发光叠上去,云下面暗一些
     if (uCityMode > 1.5) c = c * 0.2 + cityTex.rgb * (1.0 - 0.75 * cloudA);
+    // 第八十八轮:晨昏线开着、白天模式 —— 夜里那半边亮起城市灯光(云下面暗一些)
+    else if (uTerm > 0.5 && uCityNOn > 0.5) c += textureGrad(uCityN, st, gx, gy).rgb * (1.0 - dayK) * (1.0 - 0.75 * cloudA);
     if (uGrid > 0.5) {
       float stp = uGridStep;
       float dl = abs(fract(lon / stp + 0.5) - 0.5) * stp;
@@ -685,12 +702,13 @@ void main() {
 const ANISO = 48;
 
 /** 贴图的槽位 */
-export type GlobeSlot = 'terrain' | 'civ' | 'sel' | 'hl' | 'replay' | 'water' | 'slope' | 'cloud' | 'city' | 'scar';
-const SLOTS: GlobeSlot[] = ['terrain', 'civ', 'sel', 'hl', 'replay', 'water', 'slope', 'cloud', 'city', 'scar'];
+export type GlobeSlot = 'terrain' | 'civ' | 'sel' | 'hl' | 'replay' | 'water' | 'slope' | 'cloud' | 'city' | 'scar' | 'cityN';
+const SLOTS: GlobeSlot[] = ['terrain', 'civ', 'sel', 'hl', 'replay', 'water', 'slope', 'cloud', 'city', 'scar', 'cityN'];
 const UNIFORM_OF: Record<GlobeSlot, string> = {
   terrain: 'uTerrain',
   city: 'uCity',
   scar: 'uScar',
+  cityN: 'uCityN',
   civ: 'uCiv',
   sel: 'uSel',
   hl: 'uHlTex',
@@ -878,6 +896,15 @@ export class GlobeGL {
     gl.uniform1f(this.u('uReplay'), look.replay);
     gl.uniform1f(this.u('uCityMode'), look.city ?? 0);
     gl.uniform1f(this.u('uScarOn'), look.scar ?? 0);
+    // 第八十八轮:晨昏线(写实风才有)
+    const sun = look.sun && look.style === 'realistic' ? look.sun : null;
+    if (sun) {
+      const lo = (sun[0] * PI) / 180,
+        la = (sun[1] * PI) / 180;
+      gl.uniform3f(this.u('uSun'), Math.cos(la) * Math.cos(lo), Math.cos(la) * Math.sin(lo), Math.sin(la));
+    }
+    gl.uniform1f(this.u('uTerm'), sun ? 1 : 0);
+    gl.uniform1f(this.u('uCityNOn'), sun ? (look.cityN ?? 0) : 0);
     gl.uniform1f(this.u('uRelief'), look.relief && look.style === 'realistic' ? 1 : 0);
     const wt = look.weights ?? reliefWeights();
     gl.uniform4f(this.u('uReliefW'), wt.detail, wt.macro, wt.sea, wt.shadow);

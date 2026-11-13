@@ -59,6 +59,7 @@ import { EventPins, type WorldToClient } from './EventPins';
 import { NukeLayer } from './NukeLayer';
 import { NukeScarLayer } from './NukeScarLayer';
 import { CityLayer } from './CityLayer';
+import { setGlobeSun } from './globeCity';
 import { WonderLayer } from './WonderLayer';
 import { DirectorCaption, DirectorEngine, DirectorPanels, DirectorPin } from './Director';
 import { directorHandBack, setDirectorMode, useDirectorOn } from './directorStore';
@@ -2472,6 +2473,10 @@ function AppBody({ fromHome }: { fromHome?: HomeStart }) {
   const moonOn = useSpaceUi().moon && unl.moon && !unl.all;
   // 第五十一轮:夜景(有了电力以后)
   const nightOn = useSpaceUi().night && unl.night && !unl.all;
+  // 第八十八轮:地球仪真实晨昏线(开关在右边按钮里);有了电力以后夜里那半边亮灯
+  const termOn = useSpaceUi().term;
+  useEffect(() => setGlobeSun(termOn), [termOn]);
+  const nightLights = termOn && !nightOn && (unl.all || unl.night);
   // 只有点过底图才算手动选的(网址里的 map= 可能是自动换时写进去的,不算)
   const wantBase = useRef<BaseId | null>(null);
   useEffect(() => {
@@ -2711,7 +2716,7 @@ function AppBody({ fromHome }: { fromHome?: HomeStart }) {
           </div>
         )}
         {/* 地图上钉在事发地的事件标签;导播开着时播放经过的大事换成导播的圆环 + 名牌(Director.tsx),点编年史跳过去的照旧 */}
-        {data && world && globeOn && <CityLayer globe civ={draft || home ? null : civ} world={data.world} raster={data.raster} toClient={globeToClient} urban={style === 'realistic' && surface !== 'geo' && surface !== 'geoMute'} night={nightOn} hidden={replayOn} />}
+        {data && world && globeOn && <CityLayer globe civ={draft || home ? null : civ} world={data.world} raster={data.raster} toClient={globeToClient} urban={style === 'realistic' && surface !== 'geo' && surface !== 'geoMute'} night={nightOn} nightLights={nightLights && style === 'realistic'} hidden={replayOn} />}
         {/* 第六十八轮:地球仪上的核痕(平面图的在文字层下面,见上) */}
         {data && world && globeOn && <NukeScarLayer civ={civ} world={data.world} raster={data.raster} toClient={globeToClient} globe={globeApi} hidden={replayOn} />}
         {data && world && <WonderLayer civ={civ} world={data.world} toClient={globeOn ? globeToClient : worldToClient} globe={globeOn ? globeApi : null} hidden={replayOn} />}

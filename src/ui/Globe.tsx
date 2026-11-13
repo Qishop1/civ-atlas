@@ -39,7 +39,7 @@
  * 开关就是"投影"切换里的 globe(ui/projection.ts;"图层与投影"弹层的投影、地图右下角的"地球仪 / 平面地图"按钮都改它,网址 proj=globe,旧的 view=globe 也认);
  * 经纬网和平面投影共用一个开关;中心经度和 mapWrap.ts 的中心互通(打开时从当前中心转起,停下来就记下正对着的经度)。
  */
-import { globeCity, globeScar, subscribeGlobeCity } from './globeCity';
+import { SUN, globeCity, globeScar, globeSun, subscribeGlobeCity } from './globeCity';
 import { enterSystemView } from './spaceStore';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import type { World } from '../gen/world';
@@ -1653,9 +1653,13 @@ export function Globe({ world, raster, civ, geo, style, layer, look = 'classic',
     // 第六十九轮:城区贴图有新的就换进槽位 city
     if (s.gl && s.cityVer !== globeCity.ver) {
       s.gl.upload('city', globeCity.src);
+      // 第八十八轮:夜景灯光(晨昏线夜里那半边)
+      s.gl.upload('cityN', globeCity.night);
       s.cityVer = globeCity.ver;
     }
     look.city = globeCity.mode;
+    if (globeSun.on) look.sun = SUN;
+    look.cityN = globeCity.night ? 1 : 0;
     // 第七十四轮:核痕贴图有新的就换进槽位 scar
     if (s.gl && s.scarVer !== globeScar.ver) {
       s.gl.upload('scar', globeScar.src);
@@ -2325,7 +2329,7 @@ export function Globe({ world, raster, civ, geo, style, layer, look = 'classic',
       out.width = W;
       out.height = H;
       const octx = out.getContext('2d')!;
-      const look: GlobeLook = { style: p.style, relief: s.relief, weights: reliefWeights(p.look), graticule: p.graticule, hl: 0, replay: s.replayMix, clouds: cloudLook(), city: globeCity.mode, scar: globeScar.src ? 1 : 0 };
+      const look: GlobeLook = { style: p.style, relief: s.relief, weights: reliefWeights(p.look), graticule: p.graticule, hl: 0, replay: s.replayMix, clouds: cloudLook(), city: globeCity.mode, scar: globeScar.src ? 1 : 0, ...(globeSun.on ? { sun: SUN } : {}), cityN: globeCity.night ? 1 : 0 };
       if (s.gl) {
         const ow = cvs.width;
         const oh = cvs.height;

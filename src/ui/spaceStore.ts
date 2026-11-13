@@ -118,8 +118,10 @@ interface SpaceUi {
   moonGlobe: boolean;
   /** 夜景开着(第五十一轮) */
   night: boolean;
+  /** 第八十八轮:地球仪真实晨昏线开着(默认开) */
+  term: boolean;
 }
-let ui: SpaceUi = { panel: false, moon: false, moonGlobe: false, system: null, astro: 1 / 365.25, night: false };
+let ui: SpaceUi = { panel: false, moon: false, moonGlobe: false, system: null, astro: 1 / 365.25, night: false, term: true };
 const subs = new Set<() => void>();
 const emit = (next: SpaceUi) => {
   ui = next;
@@ -130,6 +132,7 @@ export const closeSpacePanel = () => ui.panel && emit({ ...ui, panel: false });
 export const setMoonView = (on: boolean) => ui.moon !== on && emit({ ...ui, moon: on });
 export const setMoonGlobe = (on: boolean) => ui.moonGlobe !== on && emit({ ...ui, moonGlobe: on });
 export const setNight = (on: boolean) => ui.night !== on && emit({ ...ui, night: on });
+export const setTerm = (on: boolean) => ui.term !== on && emit({ ...ui, term: on });
 export const enterSystemView = (e: SystemEntry) => !ui.system && emit({ ...ui, system: e });
 export const exitSystemView = () => ui.system && emit({ ...ui, system: null });
 /** 天文档的几挡(每秒走多少;按这个世界一年几天换算成年) */
