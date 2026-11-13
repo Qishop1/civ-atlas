@@ -44,7 +44,7 @@ import type { Civ, Polity, PolityLineage, PopulationAt, Regions, Settlement, Yea
 import { fexp, flog, fpow } from './engine/rand';
 import { KM_PER_UNIT, REF_CELLS } from './scale';
 import { dynastyIndexAt, polityRootAt } from './polityRoot';
-import { hasReform, reformedSeg, titleSeg } from './regime';
+import { hasReform, lineageAt, reformedSeg, titleSeg } from './regime';
 import { isNameToken, nameForm, type RootShape } from './nameToken';
 import { federationName } from './homeworld';
 
@@ -704,9 +704,11 @@ export function polityName(p: Polity, year: Year): string {
 /**
  * 本地分支 modern-pace:国都进了工业以后(Polity.modern),国号换成近现代的说法 ——
  * 王朝、皇朝 → 帝国;大汗国 → 帝国、汗国 → 王国;部 → 国;电气以后的大共和国(第 3 档)→ 联邦共和国。
+ * 第七十九轮起共和国元首在电气以后叫"总统",第八十六轮:共和那一段(城邦共和一系,或改制的共和、军政府)第 3 档的"帝国"电气以后也改叫联邦共和国
+ * (不然成了"某某帝国总统")。
  * 只改显示的名字(这些字地图字体里都有),不改推演。还没进工业的国家照旧。
  */
-export function modernTitle(p: Pick<Polity, 'modern' | 'modernName' | 'federation' | 'homeworld'>, year: Year, name: string, tier: number): string {
+export function modernTitle(p: Pick<Polity, 'modern' | 'modernName' | 'federation' | 'homeworld' | 'lineage' | 'dynasties'>, year: Year, name: string, tier: number): string {
   // 本地分支 modern-pace 第二十六轮:星球联邦(第六十三轮起按母星名叫"某某联邦")
   if (p.federation !== undefined && p.federation <= year) return federationName(p);
   let steps = 0;
@@ -718,6 +720,7 @@ export function modernTitle(p: Pick<Polity, 'modern' | 'modernName' | 'federatio
   if (name.endsWith('汗国')) return `${name.slice(0, -2)}王国`;
   if (name.endsWith('部')) return `${name.slice(0, -1)}国`;
   if (steps >= 2 && tier >= 3 && name.endsWith('共和国') && !name.endsWith('联邦共和国')) return `${name.slice(0, -3)}联邦共和国`;
+  if (steps >= 2 && name.endsWith('帝国') && lineageAt(p, year) === 'republic') return `${name.slice(0, -2)}联邦共和国`;
   return name;
 }
 
