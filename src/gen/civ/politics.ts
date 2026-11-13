@@ -62,8 +62,10 @@ import { addPolity, canCross, coreOf, endPolity, foundingYear, modernSteps, move
 /** 本地分支 modern-pace:民族自决 —— 国都进了近现代的国家,异族的州离心力每档再加 NATION_D;分裂后歇 SPLIT_REST_MODERN 年(古代 SPLIT_REST) */
 const NATION_D = 0.5;
 const SPLIT_REST_MODERN = 40;
-/** 本地分支 modern-pace 第三十一轮:地球联邦里分裂的机会还剩几成(各族自治,离心力也减半) */
-const FED_SPLIT = 0.3;
+/** 本地分支 modern-pace 第三十一轮:地球联邦里分裂的机会还剩几成(各族自治,离心力也减半)。第七十六轮 0.3 → 0.7,占天下越大越容易分 */
+const FED_SPLIT = 0.7;
+/** 第七十六轮:联邦异族的离心力打几折(原来 0.5) */
+const FED_FOREIGN = 0.75;
 import { warModelOf, type WarModel } from './wars';
 import { capacityAt, capitalAt, populationAt } from './growth';
 import type { ControlModel } from './control';
@@ -490,7 +492,7 @@ function hook(sim: CivSim, pol: PoliticsModel): void {
       let d = cm ? cm.remote(pid, r, t) : Math.min(4, dist[r] / SPLIT_REACH); // 走不到国都(Infinity)的州按 4 算
       if (lords && cm!.inLord(r)) d += LORD_D;
       // 第三十一轮:地球联邦给各族自治,异族的离心力减半、不再按近现代加码
-      if (culture[r] !== P.culture) d += P.federation !== undefined ? FOREIGN_D * 0.5 : FOREIGN_D + NATION_D * ms;
+      if (culture[r] !== P.culture) d += P.federation !== undefined ? FOREIGN_D * FED_FOREIGN : FOREIGN_D + NATION_D * ms;
       const age = t - wm.since[r];
       if (wm.prev[r] >= 0 && wm.prev[r] !== pid && age < RECENT) d += RECENT_D * (1 - age / RECENT);
       dis[r] = d;
@@ -503,7 +505,15 @@ function hook(sim: CivSim, pol: PoliticsModel): void {
     }
     if (r0 < 0) return false;
     const d0 = dis[r0];
-    const odds0 = SPLIT_ODDS * fexp(SPLIT_K * (d0 + g - SPLIT_D0)) * (P.federation !== undefined ? FED_SPLIT : 1);
+    // 第七十六轮:联邦占天下越大越容易分(× (1 + 2 × (份额 − 0.4))),近 50 年动过核武再 × 1.5
+    let fedK = 1;
+    if (P.federation !== undefined) {
+      let all = 0;
+      for (const Q of pm.polities) if (Q.ended === undefined) all += pm.size[Q.id] ?? 0;
+      const share = all ? N / all : 0;
+      fedK = FED_SPLIT * (1 + 2 * Math.max(0, share - 0.4)) * (Number.isFinite(wm.lastNuke) && t - wm.lastNuke < 50 ? 1.5 : 1);
+    }
+    const odds0 = SPLIT_ODDS * fexp(SPLIT_K * (d0 + g - SPLIT_D0)) * fedK;
     const oddsIn = sim.influence?.get('split.odds');
     const odds = oddsIn ? odds0 * mulOf(oddsIn, pid) : odds0;
     if (keyed(pol.base, pm.ptag[pid], k, U_SPLIT) >= odds / (1 + odds)) return false;

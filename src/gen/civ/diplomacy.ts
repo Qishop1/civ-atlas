@@ -56,6 +56,7 @@ import { MARRIAGES_KNOBS } from './marriages';
 import { polityBorders, warModelOf, type War, type WarModel } from './wars';
 import { capitalAt, polityAlive, populationAt } from './growth';
 import { politicsModelOf } from './politics';
+import { blockedAt } from './orbit';
 import type { CivModule } from './modules';
 import { Ev } from './events';
 import { civApi, type DiplomacyApi } from './api';
@@ -159,6 +160,8 @@ const U_PACT = 6;
 const U_JOIN = 7;
 /** 本地分支 modern-pace 第二十六轮:各国加入地球联邦 */
 const U_FED = 9301;
+/** 第七十六轮:联邦成立按压力掷 */
+const U_FED_FORM = 9302;
 /** 本地分支 modern-pace:军事集团的随机数用途 */
 const U_BLOC = 9101;
 const U_BLOC_JOIN = 9102;
@@ -484,9 +487,60 @@ export function installDiplomacy(sim: CivSim, pm: PolityModel, dm: DiplomacyMode
   // ---- 本地分支 modern-pace 第二十六轮:地球联邦 ----
   /** 进了未来时代(国都那州);集团 + 保护国合计占天下有主之州几成以上才签宪章;各国看邦交时加入的机会;信息时代以后才肯加入 */
   const FED_ERA = 8;
-  const FED_SHARE = 0.4;
-  const FED_JOIN = 0.2;
+  /** 第七十六轮:集团 + 保护国至少占天下几成才可能成立(原来 0.4 就必成立;现在 0.3 起按压力掷) */
+  const FED_SHARE = 0.38;
+  const FED_JOIN = 0.1;
+  /** 第七十六轮:每次看邦交时加入的机会封顶(原来 0.8) */
+  const FED_JOIN_MAX = 0.3;
+  /** 联邦时期新立的国家(包括从联邦分出去的)多少年内不来 */
+  const FED_REJOIN = 150;
+  /** 第七十六轮:另一个集团有自己的几成以上(两边盟主都有核武)= 两极对峙,成立不了 */
+  const FED_STANDOFF = 0.4;
   const FED_JOIN_ERA = 7;
+  /**
+   * 第七十六轮:成立的"压力"(用户"为什么要大灾难才能成立""外部威胁不能给我整俩外星人吧"):
+   *   灾难 —— 最近一次动用核武按 e^(−年数 / 100) 衰减;核冬天里、刚过去 30 年 +0.5;轨道封锁着 +0.5
+   *   外部威胁 —— 别的集团(盟主 + 成员 + 保护国)和自己这边一样大 = 1(不到四成不算)
+   *   融合 —— 集团成员和盟主结盟平均多少年(150 年 = 1)
+   *   霸主 —— 份额从 0.3 到 0.7 线性 0–1
+   * 每次看邦交成立的机会 = 0.02 + 0.15 × (1.5 灾难 + 0.8 威胁 + 0.6 融合 + 1.0 霸主),封顶 0.6(灾难按 e^(−年数 / 60))
+   */
+  const fedPressure = (L: number, group: Set<number>, mine: number, all: number, t: number): number => {
+    let crisis = Number.isFinite(wm.lastNuke) && wm.lastNuke <= t ? Math.exp(-(t - wm.lastNuke) / 60) : 0;
+    if (wm.winter && t < wm.winter.until + 30) crisis += 0.5;
+    if (blockedAt(sim, t)) crisis += 0.5;
+    // 外部威胁:最大的另一个集团
+    let rival = 0;
+    let rivalNuke = false;
+    for (const P of pm.polities) {
+      const R = P.id;
+      // 对手 = 别的集团盟主,或不在任何集团、不是谁的藩属的独立大国(各带自己的成员、藩属)
+      if (group.has(R) || P.ended !== undefined || (dm.blocOf(R) >= 0 && dm.blocOf(R) !== R) || dm.liegeOf(R) >= 0) continue;
+      const g2 = new Set<number>([R, ...dm.blocMembers(R), ...dm.vassalsOf(R)]);
+      let s2 = 0;
+      for (const m of g2) if (!group.has(m)) s2 += pm.size[m] ?? 0;
+      const rv = s2 / Math.max(1, mine);
+      if (rv > rival) {
+        rival = rv;
+        rivalNuke = P.nuke !== undefined && P.nuke <= t;
+      }
+    }
+    // 第七十六轮(用户选 B):两极对峙 —— 另一个集团有自己的六成以上、两边盟主都有核武:冷战僵持,谁也成立不了(−1 = 不成立)
+    if (rival >= FED_STANDOFF && rivalNuke && pm.polities[L].nuke !== undefined && pm.polities[L].nuke! <= t) return -1;
+    const threat = rival >= 0.4 ? Math.min(1, rival) : 0;
+    let age = 0,
+      nAge = 0;
+    for (const m of dm.blocMembers(L)) {
+      const x = dm.pactOf(L, m);
+      if (x) {
+        age += t - x.since;
+        nAge++;
+      }
+    }
+    const integ = nAge ? Math.min(1, age / nAge / 150) : 0;
+    const heg = Math.min(1, Math.max(0, (mine / all - 0.3) / 0.4));
+    return 1.5 * crisis + 0.8 * threat + 0.6 * integ + 1.0 * heg;
+  };
   const fedOf = (): number => {
     for (const P of pm.polities) if (P.federation !== undefined && P.ended === undefined) return P.id;
     return -1;
@@ -504,7 +558,7 @@ export function installDiplomacy(sim: CivSim, pm: PolityModel, dm: DiplomacyMode
     for (const P of pm.polities) if (P.id !== F && P.ended === undefined && pm.size[P.id] > 0) return;
     sim.record('federation', { a: F, b: -1, n: 2, region: capRegion(F, t), settlement: capitalAt(pm.polities[F], t) });
   };
-  const tryFederate = (L: number, t: number): boolean => {
+  const tryFederate = (L: number, k: number, t: number): boolean => {
     if (fedOf() >= 0 || eraOf(L) < FED_ERA || atWar(L) || halted(L, t)) return false;
     // 集团盟主带上成员;不在集团里的大国自己带保护国
     const bloc = dm.blocOf(L);
@@ -519,6 +573,11 @@ export function installDiplomacy(sim: CivSim, pm: PolityModel, dm: DiplomacyMode
       if (group.has(P.id)) mine += pm.size[P.id];
     }
     if (!all || mine < FED_SHARE * all) return false;
+    // 第七十六轮:按压力掷(灾难、外部威胁、融合、霸主;见 fedPressure)
+    const pr = fedPressure(L, group, mine, all, t);
+    if (pr < 0) return false;
+    const odds = Math.min(0.6, 0.02 + 0.15 * pr);
+    if (keyed(dm.base, pm.ptag[L], k, U_FED_FORM) >= odds) return false;
     pm.polities[L].federation = t;
     const joined: number[] = [];
     for (const v of [...group].sort((a, b) => a - b)) {
@@ -539,7 +598,11 @@ export function installDiplomacy(sim: CivSim, pm: PolityModel, dm: DiplomacyMode
     const age = t - (pm.polities[F].federation ?? t);
     const near = borders(v, F);
     if (!near && age < 100) return false;
-    const odds = Math.min(0.8, FED_JOIN * (1 + age / 100)) * (pm.polities[v].culture === pm.polities[F].culture ? 1.5 : 1) * (near ? 1 : 0.5);
+    // 第七十六轮:联邦时期新立的(包括刚从联邦分出去的)FED_REJOIN 年内不来;机会封顶 FED_JOIN_MAX、慢慢涨;异族的核国家是钉子户
+    const V = pm.polities[v];
+    if (V.founded > (pm.polities[F].federation ?? t) && t - V.founded < FED_REJOIN) return false;
+    const holdout = V.nuke !== undefined && V.nuke <= t && V.culture !== pm.polities[F].culture ? 0.4 : 1;
+    const odds = Math.min(FED_JOIN_MAX, FED_JOIN * (1 + age / 150)) * (V.culture === pm.polities[F].culture ? 1.3 : 1) * (near ? 1 : 0.5) * holdout;
     if (keyed4(dm.base, pm.ptag[v], pm.ptag[F], k, U_FED) >= odds) return false;
     fold(F, v, t);
     unified(F, t);
@@ -680,7 +743,7 @@ export function installDiplomacy(sim: CivSim, pm: PolityModel, dm: DiplomacyMode
     // 结亲(marriage.ts):不占"一次最多出一件事"
     api.diplomacy.marry?.(p, k, t);
     // 本地分支 modern-pace 第二十六轮:地球联邦 —— 成立、各国加入
-    if (tryFederate(p, t) || tryJoinFed(p, k, t)) return;
+    if (tryFederate(p, k, t) || tryJoinFed(p, k, t)) return;
     const L = dm.liegeOf(p);
     if (L >= 0) {
       tryDefect(p, L, k, t);

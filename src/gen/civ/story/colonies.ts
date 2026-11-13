@@ -61,7 +61,7 @@ const MAX_PER: Record<ColonyBody, number> = { moon: 6, mars: 6, ring: 4, belt: 3
 /** 改叫"城"的人口 */
 const CITY_POP = 1e4;
 /** 独立的机会:母国是联邦的(公投)/ 不是的(战争) */
-const FREE_FED = 0.5;
+const FREE_FED = 0.2; // 第七十六轮:联邦不肯放人(原来 0.5)
 const FREE_WAR = 0.55;
 
 /** t 年的人口(logistic) */

@@ -505,7 +505,7 @@ function hook(sim: CivSim, um: UnrestModel, world: World, calamity: Calamity | u
     // 本地分支 modern-pace 第三十一轮:近现代国家有赈济和警察,饥民起事少得多;地球联邦再减半
     const erR = eraNowAt(sim, pm.settlements[capitalAt(P, t)].region);
     const keepR = erR < 5 ? 1 : [0.7, 0.4, 0.15, 0.08][Math.min(3, Math.floor(erR) - 5)];
-    const odds = REVOLT_ODDS * fexp(REVOLT_K * (u - REVOLT_U0)) * Math.min(1, list.length / 3) * keepR * (P.federation !== undefined ? 0.5 : 1);
+    const odds = REVOLT_ODDS * fexp(REVOLT_K * (u - REVOLT_U0)) * Math.min(1, list.length / 3) * keepR * (P.federation !== undefined ? 0.8 : 1);
     if (keyed(um.base, pm.ptag[pid], k, U_REVOLT) >= odds / (1 + odds)) return false;
     const capR = pm.settlements[capitalAt(P, t)].region;
     // 起事的州:灾最重的、不是国都、有城、不是永久划给它的州(阶段 4 干预)
@@ -595,7 +595,8 @@ function hook(sim: CivSim, um: UnrestModel, world: World, calamity: Calamity | u
     // 本地分支 modern-pace 第三十一轮:地球联邦不按"疆域太大"加动荡,大崩解的机会只剩一成
     const fed = P.federation !== undefined && !wv;
     const u = api.politics.unrest!(P, t) + (fed ? 0 : HEG_W * Math.min(1, Math.max(0, (share - HEG_0) / HEG_SPAN))) + (wv ? WINTER_U * wv.sev : 0);
-    const odds = COLLAPSE_ODDS * fexp(COLLAPSE_K * (u - COLLAPSE_U0)) * (fed ? 0.1 : 1);
+    // 第七十六轮:联邦大崩解的机会 0.1 → 0.5(用户"太美好了")
+    const odds = COLLAPSE_ODDS * fexp(COLLAPSE_K * (u - COLLAPSE_U0)) * (fed ? 0.5 : 1);
     if (keyed(um.base, pm.ptag[pid], k, U_COLLAPSE) >= odds / (1 + odds)) return false;
     return collapse(P, k, t);
   };
