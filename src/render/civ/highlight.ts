@@ -14,6 +14,7 @@ import type { World } from '../../gen/world';
 import type { Raster } from '../../gen/raster';
 import type { Civ, Year } from '../../gen/civ/types';
 import { ownersAt } from '../../gen/readers/openQuery';
+import { applyKnownClaims } from '../../gen/civ/story/claims';
 import { STRIPE_ALPHA, STRIPE_GAP, STRIPE_LINE, regionPixels, stripeAt } from './territory';
 import { mergeChains, regionChains, type SidedLine } from './borders';
 import { addToPath, chaikin, meshWrap, unwrapLine, type Polyline } from './lines';
@@ -63,6 +64,7 @@ function marksAndGroups(civ: Civ, h: CivHighlight): { marks: Uint8Array; group: 
   const group = new Int32Array(R).fill(-1);
   if (h.polities.length) {
     const own = ownersAt(civ, h.year);
+    applyKnownClaims(civ, h.year, own.polity);
     const set = new Set(h.polities);
     for (let r = 0; r < R; r++) {
       if (!set.has(own.polity[r])) continue;
@@ -492,6 +494,7 @@ function selectionPrep(world: World, raster: Raster, civ: Civ, kind: 'polity' | 
     }
   } else {
     selOwners = ownersAt(civ, year, selOwners);
+    applyKnownClaims(civ, year, selOwners.polity);
     for (let r = 0; r < R; r++) {
       if (selOwners.polity[r] !== id) continue;
       group[r] = 1;
@@ -621,6 +624,7 @@ export function selectionGroup(civ: Civ, sel: SelectionTarget, year: Year): { gr
     }
   } else {
     selOwners = ownersAt(civ, year, selOwners);
+    applyKnownClaims(civ, year, selOwners.polity);
     for (let r = 0; r < R; r++) {
       if (selOwners.polity[r] !== sel.id) continue;
       group[r] = 1;

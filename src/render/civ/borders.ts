@@ -29,6 +29,7 @@ import { tiedPair, vassalTies } from './vassals';
 import { nearX, valueNoise, wrapShifts, type WorkStep } from '../common';
 import { addToPath, chaikin, cullLines, meshWrap, sphereMean, xRange } from './lines';
 import type { CivDrawParams, CivStyle } from './overlay';
+import { claimBorderLines, claimFill, claimsAt, shareInZone } from '../../gen/civ/story/claims';
 import { projectLinePts, type Projector } from '../projection';
 
 /** 色块按界线重新判归属的范围(世界单位):平滑后的线离原始像素分界最多约 3 个单位(单测核对) */
@@ -252,6 +253,8 @@ export interface SidedLine {
   right: number;
   end0: boolean;
   end1: boolean;
+  /** 本地分支 modern-pace 第七十五轮:认领地的直线国界(手绘风也不抖) */
+  straight?: boolean;
 }
 
 /**
@@ -341,7 +344,7 @@ export function mergeChains(rc: RegionChains, owner: ArrayLike<number>): SidedLi
 function finish(l: SidedLine, fantasy: boolean): SidedLine {
   const s = chaikin(l, SMOOTH_ROUNDS);
   const p = s.pts;
-  if (fantasy) {
+  if (fantasy && !l.straight) {
     const m = p.length / 2;
     const q = p.slice();
     for (let i = 1; i < m - 1; i++) {
@@ -480,7 +483,7 @@ function coastTip(
 }
 
 interface LinesCache {
-  key: number;
+  key: number | string;
   /** 海岸断头按哪张栅格接的(换了栅格要重接) */
   raster: Raster;
   lines: SidedLine[];
@@ -517,7 +520,8 @@ function civLines(civ: Civ): CivLines {
 export function borderLines(p: CivDrawParams, layer: Layer): SidedLine[] {
   const { civ, world } = p;
   const c = civLines(civ);
-  const key = c.prefix[layer][logIndexAfter(civ.log, p.year)];
+  // 本地分支 modern-pace 第七十五轮:国家层的键带上认领的年份档(近现代瓜分无主地)
+  const key: number | string = layer === Layer.Polity ? `${c.prefix[layer][logIndexAfter(civ.log, p.year)]}|k${claimsAt(civ, world, p.year).bucket}` : c.prefix[layer][logIndexAfter(civ.log, p.year)];
   const fantasy = p.style === 'fantasy';
   const ck = `${layer}|${fantasy ? 1 : 0}`;
   const hit = c.byKey.get(ck);
@@ -528,7 +532,31 @@ export function borderLines(p: CivDrawParams, layer: Layer): SidedLine[] {
   if (own2 && own2.key === key && own2.raster === p.raster) return own2.lines;
   const own = ownersAt(civ, p.year, c.owners);
   const owner = layer === Layer.Culture ? own.culture : own.polity;
-  const lines = mergeChains(regionChains(world.mesh, civ), owner).map((l) => finish(toCoast(l, world.mesh, p.raster, civ.regions.of, owner), fantasy));
+  const fill = layer === Layer.Polity ? claimFill(civ, world, p.year, own.polity, p.raster) : null;
+  let lines = mergeChains(regionChains(world.mesh, civ), owner).map((l) => finish(toCoast(l, world.mesh, p.raster, civ.regions.of, owner), fantasy));
+  // 本地分支 modern-pace 第七十五轮:认领地里两两认领国之间 —— 按州描的锯齿界线去掉,换成分界直线上真正是两国交界的那几段(不抖)
+  if (fill && fill.claims.zones.length) {
+    const zs = fill.claims.zones;
+    lines = lines.filter((l) => {
+      for (let z = 0; z < zs.length; z++) {
+        const ps = zs[z].anchors.map((a) => a.p);
+        if (ps.length >= 2 && ps.includes(l.left) && ps.includes(l.right) && shareInZone(fill, civ.regions.of, l.pts, z) >= 0.5) return false;
+      }
+      return true;
+    });
+    const R = civ.regions;
+    for (const c of claimBorderLines(fill, R.of, (r) => world.mesh.x[R.seat[r]], (r) => world.mesh.y[R.seat[r]])) {
+      // 加密(每 ~2 世界单位一点,和州界的点距相近),再和别的界线一样收尾
+      const [ax, ay, bx, by] = c.pts;
+      const m = Math.max(2, Math.ceil(Math.hypot(bx - ax, by - ay) / 2) + 1);
+      const pts = new Float32Array(m * 2);
+      for (let i = 0; i < m; i++) {
+        pts[i * 2] = ax + ((bx - ax) * i) / (m - 1);
+        pts[i * 2 + 1] = ay + ((by - ay) * i) / (m - 1);
+      }
+      lines.push(finish({ pts, closed: false, left: c.left, right: c.right, end0: false, end1: false, straight: true }, fantasy));
+    }
+  }
   c.byKey.set(sk, { key, raster: p.raster, lines });
   return lines;
 }

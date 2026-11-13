@@ -179,7 +179,7 @@ export const TREK_ASSIM_MAJOR = 5;
  * 信仰的大事(faith,不是史事,见 religionText.ts 的 faithEntries)、时代和物产的大事(era,见 developmentText.ts 的 developmentEntries)
  */
 /** 纪事的种类(见上);改制里动了兵的革命、政变单列(时间轴上归战争那一类的红色) */
-export type EntryKind = AnnalKind | 'reign' | 'faith' | 'era' | 'thought' | 'revolution' | 'coup' | 'plugin' | 'rename' | 'science' | 'debris';
+export type EntryKind = AnnalKind | 'reign' | 'faith' | 'era' | 'thought' | 'revolution' | 'coup' | 'plugin' | 'rename' | 'science' | 'debris' | 'partition';
 
 export interface ChronicleEntry {
   /** 这一条(第一条)史事在 civ.annals 里的下标;列表里唯一,当 key 用(君主继位 = civ.annals.length + 新君的 Person.id) */

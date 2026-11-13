@@ -20,6 +20,9 @@
  * 字号用世界单位给(LabelItem.sizeWorld):地图按 REF_MAP_CSS 宽显示、缩放 1 倍时正好铺满国土;
  * 放大地图时字只按 k^grow 变大(比国土长得慢),所以放大后照样在国土里。
  */
+import { applyClaims, claimsAt } from '../../gen/civ/story/claims';
+/** 本地分支 modern-pace 第七十五轮:国土缓存的键 = 日志下标 × 1024 + 认领的年份档(近现代认领荒地,日志没变国土也会变) */
+const claimIdx = (world: World, civ: Civ, year: Year): number => logIndexAfter(civ.log, year) * 1024 + (civ.viable ? claimsAt(civ, world, year).bucket & 1023 : 0);
 import type { World } from '../../gen/world';
 import type { Raster } from '../../gen/raster';
 import type { ChangeLog, Civ, Year } from '../../gen/civ/types';
@@ -502,7 +505,7 @@ export interface PolityLabelOptions {
  */
 export function polityLabels(world: World, raster: Raster, civ: Civ, year: Year, opt: PolityLabelOptions): { labels: PolityLabel[]; field: TerritoryField | null } {
   if (!civ.polities.length) return { labels: [], field: null };
-  const idx = logIndexAfter(civ.log, year);
+  const idx = claimIdx(world, civ, year);
   // 国号档位、国都(迁都后国名要绕开新国都)、第几朝(改朝换代后国名换了)都算进缓存键
   const tiers = civ.polities
     .map((p) => (polityAlive(p, year) ? `${polityTierAt(p, year)}@${capitalAt(p, year)}#${dynastyIndexAt(p, year)}` : -1))
@@ -534,6 +537,7 @@ function territoryFieldOf(world: World, raster: Raster, civ: Civ, year: Year, id
   let fc = fieldCache.get(civ.log);
   if (!fc || fc.idx !== idx || fc.grid !== grid) {
     ownScratch = ownersAt(civ, year, ownScratch);
+    applyClaims(civ, world, year, ownScratch.polity);
     fc = { idx, grid, field: territoryField(grid, ownScratch.polity), count: countRegions(ownScratch.polity, civ.polities.length) };
     fieldCache.set(civ.log, fc);
   }
@@ -545,7 +549,7 @@ function territoryFieldOf(world: World, raster: Raster, civ: Civ, year: Year, id
  * 换上时套了改名的 civ 排国名直接用它。国名的摆法和名字有关,不在这里算
  */
 export function primePolityField(world: World, raster: Raster, civ: Civ, year: Year): void {
-  if (civ.polities.length) territoryFieldOf(world, raster, civ, year, logIndexAfter(civ.log, year));
+  if (civ.polities.length) territoryFieldOf(world, raster, civ, year, claimIdx(world, civ, year));
 }
 const projFieldCache = new WeakMap<ChangeLog, { idx: number; grid: TerritoryGrid; field: TerritoryField; count: Int32Array }>();
 const projGrids = new WeakMap<Civ['regions'], { raster: Raster; key: string; grid: TerritoryGrid }>();
@@ -601,6 +605,7 @@ function projectedPolityLabels(
   let fc = projFieldCache.get(civ.log);
   if (!fc || fc.idx !== idx || fc.grid !== grid) {
     ownScratch = ownersAt(civ, year, ownScratch);
+    applyClaims(civ, world, year, ownScratch.polity);
     fc = { idx, grid, field: territoryField(grid, ownScratch.polity), count: countRegions(ownScratch.polity, civ.polities.length) };
     projFieldCache.set(civ.log, fc);
   }
@@ -626,12 +631,13 @@ let ownScratch2: Owners | undefined;
  */
 export function polityOwnerGrid(world: World, raster: Raster, civ: Civ, year: Year): OwnerGrid {
   const grid = territoryGrid(world, raster, civ);
-  const idx = logIndexAfter(civ.log, year);
+  const idx = claimIdx(world, civ, year);
   const fc = fieldCache.get(civ.log);
   if (fc && fc.idx === idx && fc.grid === grid) return fc.field;
   const hit = ownerCache.get(civ.log);
   if (hit && hit.idx === idx && hit.grid === grid) return hit.f;
   ownScratch2 = ownersAt(civ, year, ownScratch2);
+  applyClaims(civ, world, year, ownScratch2.polity);
   const N = grid.gw * grid.gh;
   const owner = new Int16Array(N);
   for (let i = 0; i < N; i++) {

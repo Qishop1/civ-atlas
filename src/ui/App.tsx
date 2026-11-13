@@ -1,4 +1,5 @@
 import './theme.css';
+import { polityAtWorld, rememberWorld } from '../gen/civ/story/claims';
 import { setCivMesh } from '../gen/civ/story/civMesh';
 import { Component, Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { endLoadWatch, reportOpenCrash } from './openGuard';
@@ -514,7 +515,13 @@ function AppBody({ fromHome }: { fromHome?: HomeStart }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- eraView 只用到 eraK
   const civ = useMemo(() => (previewRaw && previewFull ? eraView(previewRaw, previewFull, preview!.names) : realCiv), [previewRaw, previewFull, eraK, preview?.names, realCiv]);
   // 本地分支 modern-pace 第六十轮:城市带要量距离 —— 读存档打开的历史没经过 generateCiv,这里补记网格(地块数对得上才记)
-  if (data) for (const c of [rawCiv, realFull, previewRaw, previewFull, civ]) if (c && c.habitat.suitability.length === data.world.mesh.n) setCivMesh(c, data.world);
+  if (data)
+    for (const c of [rawCiv, realFull, previewRaw, previewFull, civ])
+      if (c && c.habitat.suitability.length === data.world.mesh.n) {
+        setCivMesh(c, data.world);
+        // 第七十五轮:近现代瓜分无主地(编年史、选中高亮这些拿不到 world 的地方按它算认领)
+        rememberWorld(c, data.world);
+      }
   /** 照大纲推演的提示条上写名字用(套上改名的那一份) */
   const realCivRef = useRef(realCiv);
   realCivRef.current = realCiv;
@@ -2066,7 +2073,9 @@ function AppBody({ fromHome }: { fromHome?: HomeStart }) {
     }
     if (getCivShow().polities && civ.polities.length) {
       const y = Math.min(civ.endYear, Math.max(0, getCivTime().year ?? civ.endYear));
-      const po = ownersAt(civ, y).polity[r];
+      // 本地分支 modern-pace 第七十五轮:按点到的那一点(近现代认领的荒地、直线国界)
+      const w = worldAt(e.clientX, e.clientY);
+      const po = w && data ? polityAtWorld(civ, data.world, data.raster, y, w[0], w[1]) : ownersAt(civ, y).polity[r];
       if (po >= 0) return setSelection({ kind: 'polity', id: po }, side);
     }
     setSelection({ kind: 'region', id: r }, side);
@@ -2082,7 +2091,8 @@ function AppBody({ fromHome }: { fromHome?: HomeStart }) {
     const r = c >= 0 && c < civ.regions.of.length ? civ.regions.of[c] : -1;
     if (r < 0) return -1;
     const yr = Math.min(civ.endYear, Math.max(0, getCivTime().year ?? civ.endYear));
-    return ownersAt(civ, yr).polity[r];
+    const w = worldAt(x, y);
+    return w && data ? polityAtWorld(civ, data.world, data.raster, yr, w[0], w[1]) : ownersAt(civ, yr).polity[r];
   };
 
   // 打开改地形:单击不再看详情,已经打开的详情面板、"在地图上点一个国家"一起收起

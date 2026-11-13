@@ -601,7 +601,7 @@ const TRADE_EVENT_KINDS = kinds<TradeEvent['kind']>({ open: 1, break: 1, reopen:
 /** 史事的种类:annals.ts 的表就是全的(编译时核对过) */
 const ANNAL_KIND_NAMES = new Set(Object.keys(ANNAL_KINDS));
 /** 编年史条目的种类:史事的种类,再加这几种 */
-const ENTRY_KIND_NAMES = new Set([...ANNAL_KIND_NAMES, ...kinds<Exclude<EntryKind, AnnalKind>>({ reign: 1, faith: 1, era: 1, thought: 1, revolution: 1, coup: 1, plugin: 1, rename: 1, science: 1, debris: 1 })]);
+const ENTRY_KIND_NAMES = new Set([...ANNAL_KIND_NAMES, ...kinds<Exclude<EntryKind, AnnalKind>>({ reign: 1, faith: 1, era: 1, thought: 1, revolution: 1, coup: 1, plugin: 1, rename: 1, science: 1, debris: 1, partition: 1 })]);
 /** 河、地名路径上的点:都在地图上,最多跨出去一圈(经线那边接回来的)。太离谱的点按长度细分时分不完 */
 function pathPointsOk(a: ArrayLike<number>, step: number, at: string): void {
   for (let i = 0; i + 1 < a.length; i += step) {

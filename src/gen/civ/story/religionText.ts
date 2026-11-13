@@ -5,6 +5,7 @@
  *   创教、教派分立是大事(重要度 3);当年州数前五的国家立国教是 2;小国立国教、传入是 1。
  *   不放进 buildChronicle(那里只有史事,AI 的材料用它);编年史、时间轴、卡片里的大事用 fullChronicle(史事 + 继位以外的宗教大事)。
  */
+import { claimEntries } from './claimsText';
 import { renameEntries } from './cityNames';
 import { beltEntries } from './cityBelts';
 import { scienceEntries } from './science';
@@ -163,7 +164,9 @@ export function* fullChronicleSteps(civ: Civ): Generator<void, ChronicleEntry[]>
   // 本地分支 modern-pace 第六十五轮:科学史
   const thought3 = mergeChronicle(thought2, scienceEntries(civ, civ.annals.length * 4 + 9_000_000));
   // 本地分支 modern-pace 第六十六轮:收太空垃圾、轨道封锁的清理进度
-  const thought = mergeChronicle(thought3, orbitEntries(civ, civ.annals.length * 4 + 10_000_000));
+  const thought4 = mergeChronicle(thought3, orbitEntries(civ, civ.annals.length * 4 + 10_000_000));
+  // 本地分支 modern-pace 第七十五轮:近现代瓜分无主地(条约、宣布领土)
+  const thought = mergeChronicle(thought4, claimEntries(civ, civ.annals.length * 4 + 11_000_000));
   const out = civ.simChronicle?.length ? mergeChronicle(thought, pluginEntries(civ, thought)) : thought;
   const again = fullCache.get(civ);
   if (again) return again;

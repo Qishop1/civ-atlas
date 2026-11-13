@@ -8,6 +8,7 @@
  *   数据图层多一行数值(海拔、气温、降水、板块、群落)
  *   在地图上选干预目标时(国家面板):对象的名字 + "点击选择 / 不可选 / 本国";下了令正在推演时不显示
  */
+import { polityAtPixel } from '../gen/civ/story/claims';
 import { CLIMATE_CLASSES, CLIMATE_WATER } from '../gen/koppen';
 import { climateClassesOf } from '../render/layers';
 import type { World } from '../gen/world';
@@ -149,7 +150,9 @@ export function hoverInfo(p: {
     const r = civ.regions.of[cell];
     if (r >= 0 && civ.cultures.length) {
       owners = ownersAt(civ, year, owners);
-      const po = owners.polity[r] >= 0 ? civ.polities[owners.polity[r]] : undefined;
+      // 本地分支 modern-pace 第七十五轮:按像素(近现代认领的荒地、直线国界)
+      const pid = polityAtPixel(civ, world, raster, year, k, owners.polity);
+      const po = pid >= 0 ? civ.polities[pid] : undefined;
       const cu = owners.culture[r] >= 0 ? civ.cultures[owners.culture[r]] : undefined;
       const fa = def.faiths && civ.religion ? civ.religion.faiths[faithsAt(civ, year)[r]] : undefined;
       // 数值填色(时代、管辖、思潮):州名 + 地图上铺着的那一层的那句小字(见各层定义的 hover;这州不按那一层说就往下照别的写)

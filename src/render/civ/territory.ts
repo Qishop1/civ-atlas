@@ -37,6 +37,7 @@ import { cultureFocusColors, faithBase, faithCiv, faithColors } from './faith';
 import { numBase, numCiv, numColors, numLayerOf } from './numLayer';
 import { numLayerDrawn, numLayerShown } from './numLayers';
 import { vassalColors, vassalTies } from './vassals';
+import { claimFill, claimPixel, claimsAt, type ClaimFill } from '../../gen/civ/story/claims';
 import type { WashZones } from './neutral';
 
 /** 刚被占的州用多少年渐入 */
@@ -806,11 +807,13 @@ export function labelImage(
   wrap = 0,
   /** 全分辨率:1 = 这个像素的州是从邻块借来的(见 pixelRegions) */
   weak: Uint8Array | null = null,
+  /** 本地分支 modern-pace 第七十五轮:认领地逐像素按直线切开(国家层) */
+  fill: ClaimFill | null = null,
 ): Int16Array {
   const W = Math.ceil(w / f);
   const H = Math.ceil(h / f);
   const wk = weak ? weakScratch(W * H) : null;
-  labelRows(w, h, f, pixRegion, owner, out, weak, wk, 0, H);
+  labelRows(w, h, f, pixRegion, owner, out, weak, wk, 0, H, fill);
   if (lines) bandLabels(out, W, H, f, scale, lines, wrap, wk);
   return out;
 }
@@ -827,6 +830,7 @@ function labelRows(
   wk: Uint8Array | null,
   y0: number,
   y1: number,
+  fill: ClaimFill | null = null,
 ): void {
   const W = Math.ceil(w / f);
   const off = f >> 1;
@@ -835,7 +839,12 @@ function labelRows(
     for (let x = 0; x < W; x++) {
       const k = row + Math.min(w - 1, x * f + off);
       const r = pixRegion[k];
-      out[y * W + x] = r < 0 ? -2 : owner[r];
+      let v = r < 0 ? -2 : owner[r];
+      if (fill) {
+        const o = claimPixel(fill, k, r);
+        if (o !== -9) v = o;
+      }
+      out[y * W + x] = v;
       if (wk) wk[y * W + x] = weak![k];
     }
   }
@@ -1017,18 +1026,22 @@ function focusKey(p0: CivDrawParams, fp: CivDrawParams | null, layer: Layer): st
 
 /** washFields 的缓存键:层 + 年份 + 画风(信仰 / 时代图层再加选中的信仰,民族填色再加选中的民族) */
 function fieldsKey(p0: CivDrawParams, fp: CivDrawParams | null, layer: Layer): string {
-  return `${layer}|${p0.year}|${p0.style}${focusKey(p0, fp, layer)}`;
+  // 本地分支 modern-pace 第七十五轮:国家层带上认领的年份档(近现代瓜分无主地,civ/story/claims.ts)
+  const ck = layer === Layer.Polity ? `|k${claimsAt(p0.civ, p0.world, p0.year).bucket}` : '';
+  return `${layer}|${p0.year}|${p0.style}${focusKey(p0, fp, layer)}${ck}`;
 }
 
 /** 这一年这一层的归属、渐入系数(都是拷贝,不怕别处改) */
 function fieldOwners(p: CivDrawParams, c: Cache, layer: Layer) {
   const own = ownersAt(p.civ, p.year, c.own);
   const owner = Int16Array.from(layer === Layer.Culture ? own.culture : own.polity);
+  // 本地分支 modern-pace 第七十五轮:推演里无主的州按近现代的认领填上(铺色时认领地逐像素按直线切开,见 labelRows)
+  const fill = layer === Layer.Polity ? claimFill(p.civ, p.world, p.year, owner, p.raster) : null;
   const look = c.looks[layer];
   const fade = Float32Array.from(fadeIn(p.civ, p.year, look.since, look.fade, layer));
   let fading = false;
   for (let r = 0; r < fade.length && !fading; r++) fading = fade[r] < 1;
-  return { owner, fade, fading, look };
+  return { owner, fade, fading, look, fill };
 }
 
 /** 颜色:国土的藩属往宗主的颜色靠(vassals.ts);信仰 / 时代 / 管辖图层用信仰 / 时代 / 管辖的颜色;民族填色上选中了一个民族时别的变淡 */
@@ -1054,7 +1067,8 @@ export function washFields(p0: CivDrawParams, f: number): WashFields | null {
   if (old?.key === key) return old;
   const W = Math.ceil(raster.w / f);
   const H = Math.ceil(raster.h / f);
-  const { owner, fade, fading, look } = fieldOwners(p, c, layer);
+  const ownF = fieldOwners(p, c, layer);
+  const { owner, fade, fading, look } = ownF;
   const wrap = meshWrap(p.world.mesh);
   const lines = borderLines(p, layer);
   const shape = `${layer}|${p.style}`;
@@ -1066,7 +1080,7 @@ export function washFields(p0: CivDrawParams, f: number): WashFields | null {
     return out;
   }
   const label = old && old.label.length === W * H ? old.label : new Int16Array(W * H);
-  labelImage(raster.w, raster.h, f, raster.scale, c.pix, owner, lines, label, wrap, c.weak);
+  labelImage(raster.w, raster.h, f, raster.scale, c.pix, owner, lines, label, wrap, c.weak, ownF.fill);
   const edge = edgeField({ w: raster.w, h: raster.h, f, pixRegion: c.pix, owner, colors: look.colors, style: p.style, label, wrap: wrap > 0 }, old?.edge ?? noEdge());
   const colors = fieldColors(p0, fp, p, layer, look);
   const out: WashFields = { key, layer, f, label, W, H, edge, owner, fade, fading, colors, lines, polity: layer === Layer.Polity, pix: c.pix, faith: !!fp, shape };
@@ -1139,7 +1153,7 @@ function washFieldsSteps(p0: CivDrawParams, f: number): { steps: WorkStep[]; fie
       st = { fp, p, layer, c, key, W, H, own: fieldOwners(p, c, layer), wrap: meshWrap(p.world.mesh), lines: [], label: new Int16Array(W * H), wk: new Uint8Array(W * H), edge: null, out: null };
     },
     live((s) => void (s.lines = borderLines(s.p, s.layer))),
-    live((s, deadline) => (labelStep ??= rowSlices(H, (a, b) => labelRows(raster.w, raster.h, f, s.c.pix, s.own.owner, s.label, s.c.weak, s.wk, a, b)))(deadline)),
+    live((s, deadline) => (labelStep ??= rowSlices(H, (a, b) => labelRows(raster.w, raster.h, f, s.c.pix, s.own.owner, s.label, s.c.weak, s.wk, a, b, s.own.fill)))(deadline)),
     live((s, deadline) => (bandStep ??= bandLabelsStep(s.label, s.W, s.H, f, raster.scale, () => s.lines, s.wrap, () => s.wk))(deadline)),
     ...[0, 1, 2, 3].map((i) => live((s, deadline) => edgeOf(s).steps[i](deadline))),
     live((s) => {
