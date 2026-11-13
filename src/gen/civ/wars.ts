@@ -529,12 +529,66 @@ export function installWars(sim: CivSim, pm: PolityModel, world: World, wm: WarM
   const spacePower = (p: number, t: number): boolean => inventedHere(sim, pm.settlements[capitalAt(pm.polities[p], t)]?.region ?? -1, '人造卫星');
   const spaceTarget = (x: number, y: number, t: number): boolean => spacePower(x, t) && capEra(x, t) - capEra(y, t) >= SPACE_GAP;
 
+  /**
+   * 本地分支 modern-pace 第八十四轮:军事时代(编制、技术代差按它;远征、亮全图照旧按国都的时代):
+   *   1. 游牧国家立国头 ADOPT_YEARS 年按本族发源州此刻的时代,线性追上国都那州(占了现代的州,装备、会用要时间);
+   *   2. 立国满 ADOPT_YEARS 年的,至少是接壤邻国(没在和它打仗)、同一集团的国家里最先进的减 ARMS_LAG 档,那国到了 ARMS_MIN(工业)以后才算(军售、援助)。
+   * 同一时刻的结果记下(时刻变了就清;不跨时刻缓存,接着推和一口气推完一样)
+   */
+  const ADOPT_YEARS = 40;
+  const ARMS_LAG = 1;
+  const ARMS_MIN = 5;
+  /** 全球底线:世上最先进的国都到了 GLOBAL_MIN(电气)以后,立国满 ADOPT_YEARS 年的国家至少是它减 GLOBAL_LAG 档(枪炮靠贸易传遍世界) */
+  const GLOBAL_MIN = 6;
+  const GLOBAL_LAG = 2;
+  let milAt = NaN;
+  let worldTop = -1;
+  const milMemo = new Map<number, number>();
+  const milEra = (p: number, t: number): number => {
+    if (t !== milAt) {
+      milAt = t;
+      milMemo.clear();
+      worldTop = -1;
+      for (const Q of pm.polities) if (Q.ended === undefined && Q.founded <= t && pm.lands[Q.id]?.length) worldTop = Math.max(worldTop, capEra(Q.id, t));
+    }
+    const hit = milMemo.get(p);
+    if (hit !== undefined) return hit;
+    const P = pm.polities[p];
+    const cap = capEra(p, t);
+    const age = t - P.founded;
+    let v = cap;
+    if (age < ADOPT_YEARS) {
+      if (P.kind === 'nomad') {
+        const h = pm.cultures[P.culture]?.hearth ?? -1;
+        const base = h >= 0 ? eraNowAt(sim, h) : -1;
+        if (base >= 0 && base < cap) v = base + ((cap - base) * Math.max(0, age)) / ADOPT_YEARS;
+      }
+    } else {
+      const at = (q: number) => wm.active.some((w) => (w.a === p && w.b === q) || (w.a === q && w.b === p));
+      const src = new Set<number>(api.diplomacy.neighborsOf?.(p) ?? []);
+      if (wm.dm) {
+        const L = wm.dm.blocOf(p);
+        if (L >= 0 && L !== p) src.add(L);
+        if (L >= 0) for (const m of wm.dm.blocMembers(L)) if (m !== p) src.add(m);
+      }
+      for (const q of src) {
+        if (q === p || pm.polities[q]?.ended !== undefined || at(q)) continue;
+        const e = capEra(q, t);
+        if (e >= ARMS_MIN && e - ARMS_LAG > v) v = e - ARMS_LAG;
+      }
+      if (worldTop >= GLOBAL_MIN && worldTop - GLOBAL_LAG > v) v = worldTop - GLOBAL_LAG;
+    }
+    milMemo.set(p, v);
+    return v;
+  };
+
   /** 本地分支 modern-pace:x 打 y 的州 r 这一仗双方出什么编制(oob.ts;不用随机数,同一仗算几次都一样) */
   const OOB_FOREST = biomeTagged('forest');
   const matchup = (x: number, y: number, r: number, def: number, t: number): { ca: number; cb: number; sa: number; sb: number; spA: number; spB: number; terr: OobTerrain; real: boolean; ex: number; ey: number } => {
     const capR = (p: number) => pm.settlements[capitalAt(pm.polities[p], t)]?.region ?? -1;
-    const ex = Math.max(0, eraNowAt(sim, capR(x)));
-    const ey = Math.max(0, eraNowAt(sim, capR(y)));
+    // 第八十四轮:军事时代(游牧新立国按本族的;落后国家有军售、援助)
+    const ex = milEra(x, t);
+    const ey = milEra(y, t);
     const via = Math.max(0, wm.k.DEFENSE.indexOf(def)) as AdjKind;
     const terr: OobTerrain = { open: !OOB_FOREST[reg.biome[r]] && reg.elevation[r] < 1500, via, coastal: pm.terrain.coastal[r] === 1 };
     const salt = r * 7 + Math.floor(t);
