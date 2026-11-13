@@ -112,6 +112,7 @@ import { pandemicsOf } from './pandemicInfo';
 import { HABITABLE_SUIT, cultureLabel, regionLabel, standPassName } from './display';
 import { ownersAt } from '../engine/timeline';
 import { plagueSpans } from './plagueSpans';
+import { germOf } from '../plague';
 import { Issue, REFORM_COUP, REFORM_REVOLUTION, councilBefore, isReformIssue, rulesAt } from '../councilRules';
 import { reformedSeg, royalSeg, segRegime } from '../regime';
 import { IV_REIGNING, authorPostsFrom } from '../appoint';
@@ -4673,8 +4674,25 @@ function plagueEntry(ctx: Ctx, ids: number[]): ChronicleEntry {
       : hits.length >= 10 ? `,经航空网络迅速扩散到${shown}等 ${hits.length} 个州` : shown ? `,蔓延到${shown}${more}` : '';
     const names = closers.slice(0, 3).map((p) => pn(civ, p, e.year)).join('、');
     const shut = closers.length ? `;${names}${closers.length > 3 ? `等 ${closers.length} 国` : ''}宣布关闭口岸、暂停国际航班` : '';
-    const vax = modernN <= 3 ? '疫苗研制成功,' : '';
-    text = `${origin}出现新型传染病${spread}${shut};${years >= 2 ? `${years} 年后` : '当年'}${vax}疫情结束${cdead >= 1 ? `,共死亡${headcount(cdead)}` : ''}`;
+    // 第八十五轮:按病原写(plague.ts 的 germOf:0 呼吸道、1 出血热、2 接触传播、3 轻症);结局按这一场的编号挑,同一个世界每次一样
+    const germ = germOf(e.n);
+    const info = e.a >= 0 && modernAt(civ, e.a, e.year) >= 3;
+    const pick = ((e.war * 2654435761) >>> 0) % 100;
+    const after = years >= 2 ? `${years} 年后` : '当年';
+    const dead = cdead >= 1 ? `,共死亡${headcount(cdead)}` : '';
+    const land = shown ? `,蔓延到${shown}${more}${nations > 1 ? `,波及${nn}个国家` : ''}` : '';
+    if (germ === 1) {
+      const kept = nations <= 1 && e.a >= 0 ? `,疫情被控制在${pn(civ, e.a, e.year)}境内` : land;
+      text = `${origin}暴发出血热${kept}${shut};${after}疫情被扑灭${dead}`;
+    } else if (germ === 2) {
+      const cure = info ? ';一直没有研制出疫苗,靠抗病毒药物控制' : ';当时无药可治';
+      text = `${origin}发现一种经血液和接触传播的新型病毒${shown ? `,此后 ${years} 年间缓慢扩散到${shown}${nations > 1 ? `等${nn}国` : more}` : ''}${cure}${cdead >= 1 ? `,累计死亡${headcount(cdead)}` : ''}`;
+    } else if (germ === 3) {
+      text = `${origin}出现新型流感${spread},症状较轻${shut};${after}疫情结束${dead}`;
+    } else {
+      const end = info && pick < 55 ? `${after}疫苗研制成功,疫情结束` : pick < 80 || !info ? `${after}疫情逐渐平息` : '此后转为季节性流行,每年冬春反复';
+      text = `${origin}出现新型呼吸道传染病${spread}${shut};${end}${dead}`;
+    }
   } else if (V) {
     if (great) {
       const where = shown ? `,蔓延到${shown}等${polities.length > 1 ? `${cnNumber(polities.length)}国` : ''}${zhou(hits.length)}` : '';

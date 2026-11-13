@@ -144,6 +144,23 @@ const AIR_P = 0.35;
 const CLOSE_P = [0.35, 0.6, 0.8];
 const CLOSE_AIR = 0.12;
 const CLOSE_LAND = 0.2;
+/**
+ * 本地分支 modern-pace 第八十五轮:现代传染病的病原(史事 plague 的 n 列 = 最多传几年 + 32 × 病原;旧存档 n ≤ 4 = 呼吸道):
+ * 0 呼吸道、1 出血热、2 接触传播、3 轻症。机会、传开(× 毒力)、航空网络(× 机会)、城里死几成(×)各一列
+ */
+export const GERM_P = [0.55, 0.2, 0.15, 0.1];
+const GERM_SPREAD = [1, 0.5, 0.45, 1];
+const GERM_AIR = [1, 0, 0.3, 1];
+const GERM_LOSS = [1, 0.2, 0.35, 0.15];
+/** 这一场的轻重:SEV_LO–SEV_HI 倍(对数均匀) */
+const SEV_LO = 0.3;
+const SEV_HI = 3;
+const U_GERM = 14;
+const U_SEV = 15;
+const U_YEARS = 30;
+/** 史事 n 列 → 病原、最多传几年 */
+export const germOf = (n: number | undefined): number => ((n ?? 5) >> 5) & 3;
+export const germYears = (n: number | undefined): number => (n ?? 5) & 31;
 
 // ---------------------------------------------------------------------------
 // 模型
@@ -163,7 +180,7 @@ interface Outbreak {
   hit: Uint8Array;
   /** 上一年刚染疫的州(按州号排) */
   front: number[];
-  /** 本地分支 modern-pace 第三十二轮:现代传染病 —— 这一场最多传几年(不是 = 不给;史事 plague 的 n 列记着) */
+  /** 本地分支 modern-pace 第三十二轮:现代传染病 —— 这一场最多传几年(不是 = 不给;史事 plague 的 n 列记着)。第八十五轮起 = 年数 + 32 × 病原(germOf / germYears) */
   modern?: number;
 }
 
@@ -271,6 +288,9 @@ function hook(sim: CivSim, pl: PlagueModel, calamity: Calamity | undefined): voi
     return er < 5 ? x : Math.round(x * ERA_KEEP[Math.min(ERA_KEEP.length - 1, Math.floor(er))] * 1000) / 1000;
   };
 
+  /** 第八十五轮:第 k 场现代传染病的轻重(SEV_LO–SEV_HI 倍,对数均匀;按第几场取随机数,接着推照样算得出) */
+  const sevOf = (k: number): number => SEV_LO * (SEV_HI / SEV_LO) ** keyed(base, k, 5, U_SEV);
+
   /** 州 r 此刻有人烟的城(没有 = −1) */
   const cityNow = (r: number, t: number): number => {
     const sid = pm.cityOf[r];
@@ -298,8 +318,10 @@ function hook(sim: CivSim, pl: PlagueModel, calamity: Calamity | undefined): voi
         l.push([r, loss]);
         continue;
       }
-      const loss =
+      let loss =
         fixed ?? (ob.level ? ivLossOf(base, ob.k, reg.seat[r], ob.level) : eraKeep(withLoss(lossOf(K, base, ob.k, reg.seat[r], ob.great, populationAt(s, t), !!pm.port[r], rate), r), r));
+      // 第八十五轮:现代传染病按病原、这一场的轻重
+      if (fixed === undefined && ob.modern !== undefined) loss = Math.round(Math.min(PLAGUE_LOSS_CAP, loss * GERM_LOSS[germOf(ob.modern)] * sevOf(ob.k)) * 1000) / 1000;
       (s.sacks ??= []).push({ year: t, loss, cause: 'plague' });
       const p = owner[r];
       if (p < 0) continue;
@@ -365,8 +387,18 @@ function hook(sim: CivSim, pl: PlagueModel, calamity: Calamity | undefined): voi
     // 「天灾」多 / 很多:大瘟疫的几率是 CalamityRates.great(官方的 GREAT_ODDS 时),这个世界调过 GREAT_ODDS 的跟着按比例变
     // (没调过时 GREAT_ODDS ÷ 官方值 = 1,和原来一样)
     const great = rate ? rate.great * (GREAT_ODDS / PLAGUE_KNOBS.values.GREAT_ODDS) : GREAT_ODDS;
+    // 第八十五轮:现代传染病掷病原和最多传几年
+    let germ = 0;
+    if (er0 >= 6) {
+      const u = keyed(base, k, 3, U_GERM);
+      let acc = 0;
+      for (let i = 0; i < GERM_P.length; i++) if (u >= (acc += GERM_P[i])) germ = i + 1;
+      germ = Math.min(GERM_P.length - 1, germ);
+    }
+    const uy = keyed(base, k, 4, U_YEARS);
+    const yrs = germ === 2 ? 10 + Math.floor(16 * uy) : germ === 1 ? 1 + Math.floor(2 * uy) : (er0 >= 7 ? 1 : 2) + Math.floor(3 * uy);
     const ob: Outbreak = er0 >= 6
-      ? { k, t0: t, great: false, level: 0, hit: new Uint8Array(R), front: [], modern: er0 >= 7 ? 2 : 4 }
+      ? { k, t0: t, great: false, level: 0, hit: new Uint8Array(R), front: [], modern: yrs + 32 * germ }
       : { k, t0: t, great: sail && keyed(base, k, 1, U_GREAT) < great, level: 0, hit: new Uint8Array(R), front: [] };
     pl.now = ob;
     pl.last = t;
@@ -482,7 +514,7 @@ function hook(sim: CivSim, pl: PlagueModel, calamity: Calamity | undefined): voi
         front = got;
       }
     } else {
-      const vir = ob.great ? GREAT_SPREAD * GREAT_DECAY ** g : SPREAD * (ob.level ? IV_SPREAD[ob.level] : 1) * DECAY ** g;
+      const vir = (ob.great ? GREAT_SPREAD * GREAT_DECAY ** g : SPREAD * (ob.level ? IV_SPREAD[ob.level] : 1) * DECAY ** g) * (ob.modern !== undefined ? GERM_SPREAD[germOf(ob.modern)] : 1);
       for (const r of ob.front) spreadFrom(ob, r, vir, t, add);
       if (ob.modern !== undefined) {
         // 第一年:消息传开,决定闭关的国家关闭口岸(各记一条)
@@ -501,7 +533,7 @@ function hook(sim: CivSim, pl: PlagueModel, calamity: Calamity | undefined): voi
             if (sid < 0) continue;
             const pop = populationAt(pm.settlements[sid], t);
             if (pop < AIR_MIN) continue;
-            const odds = AIR_P * Math.min(1, pop / AIR_REF) * (closedOf(ob, owner[j], t) ? CLOSE_AIR : 1);
+            const odds = AIR_P * GERM_AIR[germOf(ob.modern)] * Math.min(1, pop / AIR_REF) * (closedOf(ob, owner[j], t) ? CLOSE_AIR : 1);
             if (keyed4(base, ob.k, reg.seat[j], 0, U_AIR + 16 * g) >= odds) continue;
             ob.hit[j] = 1;
             add.push(j);
@@ -549,7 +581,7 @@ function hook(sim: CivSim, pl: PlagueModel, calamity: Calamity | undefined): voi
 /** 一场瘟疫最多传几年 */
 function maxYears(K: PlagueKnobs, ob: { great: boolean; pan?: Year; modern?: number }): number {
   const { PAN_YEARS, GREAT_YEARS, MAX_YEARS } = K;
-  return ob.pan !== undefined ? PAN_YEARS : ob.modern !== undefined ? ob.modern : ob.great ? GREAT_YEARS : MAX_YEARS;
+  return ob.pan !== undefined ? PAN_YEARS : ob.modern !== undefined ? germYears(ob.modern) : ob.great ? GREAT_YEARS : MAX_YEARS;
 }
 
 /**
