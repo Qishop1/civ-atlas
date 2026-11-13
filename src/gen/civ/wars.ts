@@ -1235,13 +1235,17 @@ export function installWars(sim: CivSim, pm: PolityModel, world: World, wm: WarM
   /** 有洲际导弹:有核、国都进了信息时代、国都那州有运载火箭 */
   const icbm = (p: number, t: number): boolean => nuclear(p, t) && capEra(p, t) >= 7 && inventedHere(sim, pm.settlements[capitalAt(pm.polities[p], t)]?.region ?? -1, '运载火箭');
   /** 反导:国都那州有侦察卫星 / 卫星导航 = 有反导;有空间站或进了未来时代 = 有空天平台 */
-  const defenseOf = (p: number, t: number): { abm: boolean; space: boolean } => {
-    // 第六十六轮:轨道被碎片封锁的那些年,谁的卫星、天基反导都不管用
-    if (blockedAt(sim, t)) return { abm: false, space: false };
+  const defenseOf = (p: number, t: number): { abm: boolean; space: boolean; blind?: boolean } => {
     const cr = pm.settlements[capitalAt(pm.polities[p], t)]?.region ?? -1;
     const abm = inventedHere(sim, cr, '侦察卫星') || inventedHere(sim, cr, '卫星导航');
+    // 第六十六轮:轨道被碎片封锁的那些年,卫星、天基反导都不管用。
+    // 第七十七轮(用户"命中率 100% 是否有点";ICBM 会话:地面拦截在雷达覆盖内照样能打,丢的是预警和远处覆盖,中段五到七折):
+    // 陆基 / 舰载反导还在(blind = 没有预警卫星,单发成功率打 BLIND_P 折),天基平台没了
+    if (blockedAt(sim, t)) return { abm, space: false, blind: abm };
     return { abm, space: abm && (inventedHere(sim, cr, '空间站') || capEra(p, t) >= 8) };
   };
+  /** 第七十七轮:轨道封锁时(没有预警卫星)陆基反导的单发成功率打几折 */
+  const BLIND_P = 0.6;
   /**
    * 第六十六轮:开战时互打卫星(反卫星),可能引发凯斯勒连锁碎片、封锁近地轨道(orbit.ts);
    * 建成的太空电梯缩短封锁(清理便宜),但可能被碎片打断
@@ -1277,7 +1281,7 @@ export function installWars(sim: CivSim, pm: PolityModel, world: World, wm: WarM
     const d = defenseOf(dfd, t);
     if (!d.abm) return 0;
     const gap = Math.floor(capEra(dfd, t)) - Math.floor(capEra(atk, t));
-    return Math.max(0, Math.min(0.97, 0.35 + 0.28 * gap + (d.space ? 0.3 : 0)));
+    return Math.max(0, Math.min(0.97, 0.35 + 0.28 * gap + (d.space ? 0.3 : 0))) * (d.blind ? BLIND_P : 1);
   };
   /**
    * 本地分支 modern-pace 第二十一轮:核武库(一个数,不在地图上摆设施)—— 首次核试验以后攒,ARSENAL_YEARS 年攒满;

@@ -322,7 +322,9 @@ function drawBlast(ctx: CanvasRenderingContext2D, p: XY, age: number, kt: number
   // 本地分支 modern-pace 第二十九轮:闪光是主角 —— 一团很大的过曝白光(按当量,大当量的盖住一片城市群),叠加混合,几团叠在一起越叠越白;
   // 0.15 秒亮到顶,两秒里慢慢退,再留一层淡淡的暖光到第四秒
   if (age < 4) {
-    const R = km !== undefined ? clamp(30 * z, 8, 320) : 60 + 140 * s;
+    // 第七十七轮(用户"为什么 2D 没有核闪光";之前"不应该缩小"):平面图取真实大小和地球仪那样的夸张大小里大的那个 —— 远看也是一大团白光
+    const sG = Math.max(0.55, Math.min(2.2, Math.cbrt(kt / 800)));
+    const R = km !== undefined ? Math.max(clamp(30 * z, 8, 320), 60 + 140 * sG) : 60 + 140 * s;
     const peak = age < 0.15 ? age / 0.15 : Math.exp(-(age - 0.15) * 1.6);
     const warm = age < 4 ? 0.22 * Math.max(0, 1 - age / 4) : 0;
     const a = Math.min(1, 0.95 * peak + warm);
