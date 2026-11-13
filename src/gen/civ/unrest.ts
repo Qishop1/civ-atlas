@@ -79,6 +79,7 @@ import type { CivModule } from './modules';
 import { Ev } from './events';
 import { civApi } from './api';
 import { defineKnobs, type KnobSet } from './engine/knobs';
+import { blockedAt } from './orbit';
 
 // ---- 调参(以 20 个种子的统计为准) ----
 /** 这一段的旋钮(名字、官方的值;推演照这个世界的那套数算,见 engine/knobs.ts) */
@@ -281,6 +282,11 @@ export function unrestInputs(um: UnrestModel, P: Polity, t: Year): { age: number
 const FAMINE_ERA_KEEP: readonly number[] = [1, 1, 1, 1, 1, 0.5, 0.25, 0.12, 0.06];
 /** 本地分支 modern-pace 第二十三轮:各时代闹了饥荒饿死的人还剩几成(工业 0.6、电气 0.3、信息 0.1、未来 0.05;赈济、运粮、医疗) */
 const FAMINE_LOSS_KEEP: readonly number[] = [1, 1, 1, 1, 1, 0.6, 0.3, 0.1, 0.05];
+/** 第七十九轮:议和不到几年、这州易主不到几年,赈济还按这州自己的时代(见饥荒那一段) */
+const RELIEF_PEACE = 5;
+const RELIEF_SINCE = 10;
+/** 第七十九轮:太平年里闹饥荒的机会再乘几成(按国都的时代:工业以前、工业 1,电气 0.6,信息 0.2,未来 0.1) */
+const RELIEF_KEEP: readonly number[] = [1, 1, 1, 1, 1, 1, 0.6, 0.2, 0.1];
 
 export function installUnrest(sim: CivSim, pm: PolityModel, seed: number, world: World, calamity: Calamity | undefined): UnrestModel {
   const wm = warModelOf(sim);
@@ -462,11 +468,22 @@ function hook(sim: CivSim, um: UnrestModel, world: World, calamity: Calamity | u
         const full = 1 / (1 + GROWTH_A * fexp(-s.growth * (t - s.founded)));
         const f2 = full * full;
         // 本地分支 modern-pace:工业以后运输、储备、农技让灾年少饿死人,按州此刻的时代打折
-        const er = eraNowAt(sim, r);
-        const ek = er < 5 ? 1 : FAMINE_ERA_KEEP[Math.min(FAMINE_ERA_KEEP.length - 1, Math.floor(er))];
+        let er = eraNowAt(sim, r);
         // 本地分支 modern-pace 第二十四轮:核冬天里饥荒多几倍,时代的减免也大半不管用(烟尘蔽日,全球减产)
         const wn = um.wm.winter;
         const nw = !!wn && t >= wn.from && t < wn.until;
+        // 第七十九轮:太平年里赈济按国都的时代(铁路、空运、配给送得到边远的州);打着仗、刚议和、刚易主、轨道封锁、核冬天里送不到,照旧按这州自己的
+        const o0 = owner[r];
+        let relief = 1;
+        if (o0 >= 0 && !nw && t - um.wm.since[r] >= RELIEF_SINCE && !(t - (um.wm.rest.get(o0) ?? -Infinity) < RELIEF_PEACE) && !um.wm.active.some((w) => w.a === o0 || w.b === o0) && !blockedAt(sim, t)) {
+          const P0 = pm.polities[o0];
+          if (P0 && P0.ended === undefined) {
+            const ce = eraNowAt(sim, pm.settlements[capitalAt(P0, t)].region);
+            er = Math.max(er, ce);
+            relief = ce < 5 ? 1 : RELIEF_KEEP[Math.min(RELIEF_KEEP.length - 1, Math.floor(ce))];
+          }
+        }
+        const ek = relief * (er < 5 ? 1 : FAMINE_ERA_KEEP[Math.min(FAMINE_ERA_KEEP.length - 1, Math.floor(er))]);
         const odds = (nw ? Math.max(ek, 0.5) * 3 : ek) * sev * (1 - HOP_FADE * hop[r]) * CLIMATE[reg.biome[r]] * (P_BASE + P_FULL * f2 * f2) * (soil ? 1 + SOIL_W * (1 - soil[r]) : 1);
         const tag = reg.seat[r];
         if (keyed4(um.base, k, tag, c, U_HIT) >= odds) continue;

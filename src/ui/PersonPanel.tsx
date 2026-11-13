@@ -48,7 +48,7 @@ import type { Civ, Person, PersonSpouse, RulerLeanings } from '../gen/civ/types'
 import { polityName, polityTierAt } from '../gen/readers/openQuery';
 import { buildChronicle, cnNumber, filterChronicle, reignEntries, type ChronicleEntry } from '../gen/civ/story/chronicle';
 import { commandFoes, peopleIndex, personFame, personSpan, rulerNeighbors, type Foe } from '../gen/civ/story/peopleInfo';
-import { LEANING_KEYS, LEANING_TEXT, ageAt, consortRole, dowagerSpans, dowagerWordOf, generalRole, isConsul, kinOf, leaningsText, ministerRole, personName, princeRef, princeRole, rulerBare, rulerFateWord, rulerRef, rulerRole, rulerShort, rulerTitle, seatPolity, splitSurname } from '../gen/civ/story/peopleText';
+import { LEANING_KEYS, LEANING_TEXT, ageAt, consortRole, dowagerSpans, dowagerWordOf, generalRole, isConsul, kinOf, leaningsText, ministerRole, modernConsul, personName, princeRef, princeRole, rulerBare, rulerFateWord, rulerRef, rulerRole, rulerShort, rulerTitle, seatPolity, splitSurname, westLineage } from '../gen/civ/story/peopleText';
 import { REGENCY_END, REGENCY_VERB, brideMatchOf, brideName, heldOver, kinAt, overlapOf, polityShort, type Held } from '../gen/civ/story/regentInfo';
 import { eastRank, heOrShe, isFemale, kinWord, wedVerb, westRank } from '../gen/civ/story/gender';
 import { treatyBook } from '../gen/civ/story/treatyInfo';
@@ -930,8 +930,12 @@ function kinLines(civ: Civ, x: Person, out: Line[], era: Era | undefined) {
 function rulerRank(civ: Civ, x: Person): string {
   const p = civ.polities[x.polity];
   if (!p) return '君主';
-  const tier = Math.min(3, Math.max(0, polityTierAt(p, Math.max(x.from ?? 0, (x.until ?? civ.endYear) - 1 / 512))));
-  return p.eastern ? eastRank(x, tier) : westRank(x, p.lineage, tier);
+  const at = Math.max(x.from ?? 0, (x.until ?? civ.endYear) - 1 / 512);
+  const tier = Math.min(3, Math.max(0, polityTierAt(p, at)));
+  // 本地分支 modern-pace 第七十九轮:电气时代以后的共和国总统 / 军政府首脑;西幻汗系按王国一系
+  const mc = modernConsul(p, x, at);
+  if (mc) return mc;
+  return p.eastern ? eastRank(x, tier) : westRank(x, westLineage(p, at), tier);
 }
 
 /** 幼主怎么称呼(太后那几行里):东方有称号的写称号("愍帝"),没有写名字;西幻 "塞尔维里努斯" */

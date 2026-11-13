@@ -15,7 +15,30 @@ import type { Civ, Person, PersonRegency, Polity, RulerLeanings, Year } from '..
 import { polityName, polityRootAt, polityShortTitle, polityTierAt, polityTitles } from '../growth';
 import { isNameToken, nameForm } from '../nameToken';
 import { childWord, dowagerWord, eastRank, isFemale, khanWord, postTitle, princeWord, westRank } from './gender';
-import { reformedSeg, royalSeg } from '../regime';
+import { reformedSeg, royalSeg, segRegime } from '../regime';
+
+/**
+ * 本地分支 modern-pace 第七十九轮:共和国 / 军政府的元首在近现代的称呼 —— 国都进了电气时代(Polity.modern 的第二刻)以后,
+ * 共和那几段写"总统"、军政府写"军政府首脑";有王室的、还没到电气时代的 = null(照旧"执政""执政官",第 3 档的"皇帝")
+ */
+export function modernConsul(p: Polity, x: Person, at: Year): string | null {
+  if (x.role !== 'ruler' || royalSeg(p, x.dynasty ?? 0)) return null;
+  const e = p.modern?.[1];
+  if (e === undefined || e > at) return null;
+  return segRegime(p, x.dynasty ?? 0) === 'junta' ? '军政府首脑' : '总统';
+}
+
+/** 第七十九轮:西幻君号用哪一系 —— 汗系的国家国都进了电气时代以后按王国一系(国王 / 女王 / 皇帝),别的照旧 */
+export function westLineage(p: Polity | null | undefined, at: Year): Polity['lineage'] {
+  const l = p?.lineage;
+  return l === 'khanate' && modernState(p, at) ? 'realm' : l;
+}
+
+/** 第七十九轮:p 国此刻(at)的国都进了电气时代没有(改制条目里"执政"换"总统"用) */
+export function modernState(p: Polity | null | undefined, at: Year): boolean {
+  const e = p?.modern?.[1];
+  return e !== undefined && e <= at;
+}
 
 function polityOfPerson(civ: Civ, x: Person): Polity | null {
   return x.polity >= 0 && x.polity < civ.polities.length ? civ.polities[x.polity] : null;
@@ -79,6 +102,9 @@ function refOf(civ: Civ, x: Person, year: Year, realm: boolean): string {
   if (!p) return x.name;
   const tier = tierFor(p, x, year);
   const at = Math.min(Math.max(year, x.from ?? p.founded), (x.until ?? Infinity) - 1 / 512);
+  // 第七十九轮:电气时代以后的共和国总统、军政府首脑:"卢诺拉联邦总统某某"
+  const mc = modernConsul(p, x, at);
+  if (mc) return `${realm ? (p.eastern ? polityShortTitle(p, 3, at) : polityName(p, at)) : ''}${mc}${x.name}`;
   // 改出来的共和国、军政府的执政:"博戈维纳共和国执政某某""大靖执政某某"
   if (x.role === 'ruler' && reformedSeg(p, x.dynasty ?? 0)) return `${realm ? (p.eastern ? polityShortTitle(p, 3, at) : polityName(p, at)) : ''}执政${x.name}`;
   const title = rulerTitle(civ, x);
@@ -91,7 +117,7 @@ function refOf(civ: Civ, x: Person, year: Year, realm: boolean): string {
     if (tier >= 3) return `${realm ? polityShortTitle(p, 3, at) : ''}${eastRank(x, 3)}${x.name}`;
     return `${coreRoot(root)}${eastRank(x, tier)}${x.name}`;
   }
-  return `${realm ? polityRootAt(p, at) : ''}${westRank(x, p.lineage, tier)}${x.name}${title}`;
+  return `${realm ? polityRootAt(p, at) : ''}${westRank(x, westLineage(p, at), tier)}${x.name}${title}`;
 }
 
 /** 这一刻领兵的是不是在位的君主本人(即位以前就领兵的不算亲征) */
@@ -167,6 +193,8 @@ export function rulerRole(civ: Civ, x: Person): string {
   if (!p) return '';
   const at = lastReignYear(civ, x);
   const tier = tierFor(p, x, at);
+  const mc = modernConsul(p, x, at);
+  if (mc) return `${polityName(p, at)}${mc}`;
   if (x.role === 'ruler' && reformedSeg(p, x.dynasty ?? 0)) return `${polityName(p, at)}执政`;
   if (p.eastern) {
     if (p.lineage === 'khanate') return tier <= 0 ? `${polityTitles(p, at)[0]}首领` : `${polityName(p, at)}${khanWord(x)}`;
@@ -174,7 +202,7 @@ export function rulerRole(civ: Civ, x: Person): string {
     if (tier >= 3) return `${polityShortTitle(p, 3, at)}${eastRank(x, 3)}`;
     return `${coreRoot(polityRootAt(p, at))}${eastRank(x, tier)}`;
   }
-  return `${polityRootAt(p, at)}${westRank(x, p.lineage, tier)}`;
+  return `${polityRootAt(p, at)}${westRank(x, westLineage(p, at), tier)}`;
 }
 
 /** 名臣的身份:"大景丞相""兹拉季纳首相"(国名按做到最高那个官那年的简称) */
@@ -264,7 +292,7 @@ export function personRoleShort(civ: Civ, x: Person): string {
   const p = polityOfPerson(civ, x);
   if (!p) return '君主';
   const y = x.from ?? x.born;
-  return `${polityShortTitle(p, tierFor(p, x, y), y)}${royalSeg(p, x.dynasty ?? 0) ? '君主' : '执政'}`;
+  return `${polityShortTitle(p, tierFor(p, x, y), y)}${royalSeg(p, x.dynasty ?? 0) ? '君主' : (modernConsul(p, x, y) ?? '执政')}`;
 }
 
 /** 共和国的执政官(写"执政""在任""任满",不写"君主""在位"):海洋城邦共和一系,和改制开的共和、军政府那几段 */

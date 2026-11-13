@@ -113,11 +113,11 @@ import { HABITABLE_SUIT, cultureLabel, regionLabel, standPassName } from './disp
 import { ownersAt } from '../engine/timeline';
 import { plagueSpans } from './plagueSpans';
 import { Issue, REFORM_COUP, REFORM_REVOLUTION, councilBefore, isReformIssue, rulesAt } from '../councilRules';
-import { reformedSeg, royalSeg } from '../regime';
+import { reformedSeg, royalSeg, segRegime } from '../regime';
 import { IV_REIGNING, authorPostsFrom } from '../appoint';
 import { practicesAt } from './practiceInfo';
 import { Practice, hasPractice } from '../practices';
-import { ageAt, coreRoot, dowagerSpans, dowagerWordOf, generalRef, kinOf, leaderName, ministerRole, princeRef, princeTitle, reigningAt, rulerBare, rulerRef, rulerShort, rulerTitle, splitSurname } from './peopleText';
+import { ageAt, coreRoot, dowagerSpans, dowagerWordOf, generalRef, kinOf, leaderName, ministerRole, modernConsul, modernState, westLineage, princeRef, princeTitle, reigningAt, rulerBare, rulerRef, rulerShort, rulerTitle, splitSurname } from './peopleText';
 import { bySex, childWord, heOrShe, heirWord, isFemale, khanWord, kinWord, rivalsWord, westRank, type Sexed } from './gender';
 import { eraText, monthTail, type Era } from '../../era';
 import { biomeHas } from '../../biomes';
@@ -988,7 +988,7 @@ function dynastyText(civ: Civ, e: Annal, ix: PeopleIndex | null = null, usurped 
     let t = `${realm}${p.lineage === 'khanate' ? '汗位易主' : '王朝更替'},${oldName}${n >= 1 ? `统治 ${n} 年后结束` : '绝嗣'},${reignName(civ, p, i, y)}上台`;
     if (usurped && nu && dowagerSpans(nu).length) {
       const son = old && old.mom === nu.id ? '自己的儿子' : '';
-      t += `,${dowagerWordOf(civ, nu, y - 1 / 512)}${nu.name}${old ? `废黜${son}${old.name}` : ''},自立为${westRank(nu, p.lineage, Math.max(1, polityTierAt(p, y)))}`;
+      t += `,${dowagerWordOf(civ, nu, y - 1 / 512)}${nu.name}${old ? `废黜${son}${old.name}` : ''},自立为${westRank(nu, westLineage(p, y), Math.max(1, polityTierAt(p, y)))}`;
     } else if (usurped && nu) t += `,${nu.posts?.length ? ministerRef(nu, y - 1 / 512) : `权臣${nu.name}`}发动政变${old ? `,废黜${old.name}` : ''},自立为${p.lineage === 'khanate' ? khanWord(nu) : bySex(nu, '国王', '女王')}`;
     else if (nu) t += `,${rulerShort(civ, nu)}即位`;
     if (moved && city) t += `,迁都${city}`;
@@ -998,7 +998,7 @@ function dynastyText(civ: Civ, e: Annal, ix: PeopleIndex | null = null, usurped 
   if (usurped && nu && dowagerSpans(nu).length) {
     // 皇太后废黜她的儿子,自立为女皇 / 女王
     const son = old && old.mom === nu.id ? '其子' : '';
-    t += `,${dowagerWordOf(civ, nu, y - 1 / 512)}${nu.name}${old ? `废黜${son}${old.name}` : ''},自立为${westRank(nu, p.lineage, Math.max(1, polityTierAt(p, y)))}`;
+    t += `,${dowagerWordOf(civ, nu, y - 1 / 512)}${nu.name}${old ? `废黜${son}${old.name}` : ''},自立为${westRank(nu, westLineage(p, y), Math.max(1, polityTierAt(p, y)))}`;
   } else if (usurped && nu) t += `,${nu.posts?.length ? ministerRef(nu, y - 1 / 512) : `权臣${nu.name}`}${old ? `废黜${old.name}` : ''},自立为${bySex(nu, '王', '女王')}`;
   else if (nu) t += `,${rulerShort(civ, nu)}即位`;
   if (moved && city) t += `,迁都${city}`;
@@ -1061,6 +1061,9 @@ function sackText(civ: Civ, e: Annal): string {
   const { city } = besieged(civ, e);
   const s = e.settlement >= 0 ? civ.settlements[e.settlement] : undefined;
   const loss = s?.sacks?.find((k) => !k.cause && k.year === e.year)?.loss ?? 0;
+  // 第七十九轮:攻方进了信息时代,写攻城战 / 巷战(用户"神他妈未来时代的跨境商队")
+  if (V && modernAt(civ, e.a, e.year) >= 3)
+    return loss >= 0.7 ? `${city}在${A}军队的攻城战中大半被毁,居民大批伤亡、逃离` : loss >= 0.55 ? `${A}军队攻入${city},城区在巷战中遭严重破坏,居民大量伤亡` : `${A}军队攻入${city},城中多处遭抢掠和破坏`;
   if (V) return loss >= 0.7 ? `${A}军队在${city}大肆劫掠,全城几乎被洗劫一空` : loss >= 0.55 ? `${A}军队在${city}大肆劫掠` : `${A}军队洗劫${city}`;
   if (loss >= 0.7) return `${A}纵兵大掠${city},十室九空`;
   if (loss >= 0.55) return `${A}纵兵大掠${city}`;
@@ -4221,7 +4224,7 @@ function reformDoneText(civ: Civ, e: Annal, ix: PeopleIndex | null): string {
   if (e.war === Issue.Return) return V ? `${A}决定还政:${old ? `执政${old.name}下台,` : ''}国家大事重新由${body}决定,执政由选举产生` : `${A}议还政,议成:${old ? `执政${old.name}去位,` : ''}国事复由${body}议定、推举执政`;
   // 废君立共和:"博戈维纳王国议废王位,议成:国王斯坦波尔克逊位,国事改由议事会议定、推举执政,国号改称博戈维纳共和国"
   const tier = Math.max(1, P ? polityTierAt(P, y - 1 / 512) : 2);
-  const king = old ? (east ? rulerBare(civ, old, y) : `${westRank(old, P?.lineage, tier)}${old.name}`) : '';
+  const king = old ? (east ? rulerBare(civ, old, y) : `${westRank(old, westLineage(P, y), tier)}${old.name}`) : '';
   if (V) return `${A}决定废除${throneWord(P, y - 1 / 512)}:${king ? `${king}退位,` : ''}改行共和,国家大事由${body}决定,执政由选举产生,国号改为${pn(civ, e.a, y)}`;
   return `${A}议废${throneWord(P, y - 1 / 512)},议成:${king ? `${king}逊位,` : ''}国事改由${body}议定、推举执政,国号改称${pn(civ, e.a, y)}`;
 }
@@ -4293,9 +4296,9 @@ function reformEntry(ctx: Ctx, e: Annal, id: number): ChronicleEntry {
       const t = `${head}保皇派拥立${lastRef ? `${lastRef}${kin}` : '旧王室后裔'}${nu ? nu.name : ''}即位,废除共和,恢复国号${after}`;
       return entry(t, '辟', 'reform', nu, last ?? null);
     }
-    const rank = east ? (P && polityTierAt(P, y) >= 3 ? '皇帝' : '国王') : nu ? westRank(nu, P?.lineage, Math.max(1, P ? polityTierAt(P, y) : 2)) : '国王';
+    const rank = east ? (P && polityTierAt(P, y) >= 3 ? '皇帝' : '国王') : nu ? westRank(nu, westLineage(P, y), Math.max(1, P ? polityTierAt(P, y) : 2)) : '国王';
     const same = !!P && polityRootAt(P, y) === polityRootAt(P, y - 1 / 512);
-    const ruler = P && reformedSeg(P, P ? dynastyIndexAt(P, y - 1 / 512) : 0) ? '执政' : '将军';
+    const ruler = P && reformedSeg(P, P ? dynastyIndexAt(P, y - 1 / 512) : 0) ? (modernState(P, y) ? '总统' : '执政') : '将军';
     const t = `${head}${ruler}${nu ? nu.name : ''}解散${bodyOf(civ, e.a, y - 1 / 512)},自立为${rank},国号${same ? '恢复为' : '改为'}${after}`;
     return entry(t, '辟', 'reform', nu);
   }
@@ -4305,13 +4308,15 @@ function reformEntry(ctx: Ctx, e: Annal, id: number): ChronicleEntry {
     const king = old ? (east ? rulerBare(civ, old, y) : old.name) : '';
     let t = `${before}${woe ? `${woe},` : ''}${failedAsk(civ, civ.annals, id, e.a)}`;
     t += `${nu ? nu.name : east ? '义军' : '起义者'}起兵${r ? `于${r}` : ''}${capital ? `,入${capital}` : ''}${king ? `,废${king}` : ''}`;
-    t += `${east ? `,罢${P && polityTierAt(P, y - 1 / 512) >= 3 ? '帝' : '王'}号` : ''},立共和,国号${after}${nu ? ',自为执政' : ''}`;
+    t += `${east ? `,罢${P && polityTierAt(P, y - 1 / 512) >= 3 ? '帝' : '王'}号` : ''},立共和,国号${after}${nu ? (modernState(P, y) ? ',自任临时总统' : ',自为执政') : ''}`;
     return entry(t, '革', 'revolution', nu, old);
   }
   if (e.n === REFORM_COUP) {
     // "博戈维纳共和国大疫之后国用不足,议事会久议不决;将军米列斯拉娃率兵入莫尔格勒,散议事会,自为执政,国事决于军中"
     const body = bodyOf(civ, e.a, y - 1 / 512);
-    const t = `${before}${woe ? `${woe},` : ''}${body}久议不决;将军${nu ? nu.name : ''}率兵入${capital || '国都'},散${body},自为执政,国事决于军中`;
+    const t = modernState(P, y)
+      ? `${before}${woe ? `${woe},` : ''}${body}久议不决;将军${nu ? nu.name : ''}率兵开进${capital || '首都'},解散${body},成立军政府,自任首脑`
+      : `${before}${woe ? `${woe},` : ''}${body}久议不决;将军${nu ? nu.name : ''}率兵入${capital || '国都'},散${body},自为执政,国事决于军中`;
     return entry(t, '政', 'coup', nu, old);
   }
   // 复辟
@@ -4327,9 +4332,9 @@ function reformEntry(ctx: Ctx, e: Annal, id: number): ChronicleEntry {
     return entry(t, '辟', 'reform', nu, last ?? null);
   }
   // 旧王室没人了:执政 / 将军自立为君,当成换了一朝
-  const rank = east ? (P && polityTierAt(P, y) >= 3 ? '帝' : '王') : nu ? westRank(nu, P?.lineage, Math.max(1, P ? polityTierAt(P, y) : 2)) : '王';
+  const rank = east ? (P && polityTierAt(P, y) >= 3 ? '帝' : '王') : nu ? westRank(nu, westLineage(P, y), Math.max(1, P ? polityTierAt(P, y) : 2)) : '王';
   const same = !!P && polityRootAt(P, y) === polityRootAt(P, y - 1 / 512);
-  const ruler = P && reformedSeg(P, P ? dynastyIndexAt(P, y - 1 / 512) : 0) ? '执政' : '将军';
+  const ruler = P && reformedSeg(P, P ? dynastyIndexAt(P, y - 1 / 512) : 0) ? (modernState(P, y) ? '总统' : '执政') : '将军';
   const t = `${head}${woe ? '' : ','}${ruler}${nu ? nu.name : ''}废${bodyOf(civ, e.a, y - 1 / 512)},自立为${rank},国号${same ? '复称' : '改称'}${after}`;
   return entry(t, '辟', 'reform', nu);
 }
@@ -4432,6 +4437,36 @@ function famineToll(loss: number): string {
  * 饥荒:"大渭瑞州等三州大饥,死者十之二"(标签"饥");冬夏分明的地方闹的春荒(cause = spring)前面写"春,"。
  * 「天灾」多 / 很多时自己发生的地震水旱(cause = quake,没有干预那一条可并):"大渭瑞州一带地震,城郭多圮,死者十之二"
  */
+/** 第七十九轮:各国打仗的年份段 [宣战, 议和)(按史事重建;还没议和的到 Infinity),famineText 看"这时在不在打仗" */
+const warSpanCache = new WeakMap<readonly Annal[], Map<number, [number, number][]>>();
+function atWarAt(civ: Civ, p: number, year: Year): boolean {
+  let m = warSpanCache.get(civ.annals);
+  if (!m) {
+    m = new Map();
+    const start = new Map<number, Annal>();
+    const put = (q: number, a: number, b: number) => {
+      let l = m!.get(q);
+      if (!l) m!.set(q, (l = []));
+      l.push([a, b]);
+    };
+    for (const x of civ.annals) {
+      if (x.kind === 'war') start.set(x.war, x);
+      else if (x.kind === 'peace' && start.has(x.war)) {
+        const w = start.get(x.war)!;
+        start.delete(x.war);
+        put(w.a, w.year, x.year);
+        put(w.b, w.year, x.year);
+      }
+    }
+    for (const w of start.values()) {
+      put(w.a, w.year, Infinity);
+      put(w.b, w.year, Infinity);
+    }
+    warSpanCache.set(civ.annals, m);
+  }
+  return (m.get(p) ?? []).some(([a, b]) => year >= a && year < b + 3);
+}
+
 function famineText(civ: Civ, e: Annal): string {
   const r = regionName(civ, e.region) || cityName(civ, e.settlement);
   // 本地分支 modern-pace 第二十二轮:白话,死者写人数(灾最重那州的城乡人口 × 城里的折损;别的受灾州按一半算)
@@ -4449,6 +4484,11 @@ function famineText(civ: Civ, e: Annal): string {
       return `${P}${r || '境内'}一带${what}${e.b > 1 ? `,${zhou(e.b)}受灾` : ''}${toll}`;
     }
     const where = e.b > 1 ? `${r || '各州'}等${zhou(e.b)}` : r || '境内';
+    // 第七十九轮:信息时代以后 —— 打着仗写战火断了补给;太平年里灾轻的写粮食危机
+    if (e.a >= 0 && modernAt(civ, e.a, e.year) >= 3) {
+      if (atWarAt(civ, e.a, e.year)) return `战火切断补给,${P}${where}发生${loss >= 0.3 ? '严重' : ''}饥荒${toll}`;
+      return `${P}${where}发生${loss >= 0.3 ? '严重饥荒' : '粮食危机'}${toll}`;
+    }
     return `${e.cause === 'spring' ? '春季,' : ''}${P}${where}发生${loss >= 0.3 ? '严重' : ''}饥荒${toll}`;
   }
   if (e.cause === 'quake') {
@@ -5681,7 +5721,8 @@ function pushReigns(civ: Civ, ix: PeopleIndex | null, list: readonly Person[], o
     const ref = rulerRef(civ, prev, y);
     const minis: Person[] = [];
     let text: string;
-    if (!royalSeg(p, x.dynasty ?? 0)) text = `${ref}任满,${x.name}继任`;
+    // 第七十九轮:电气时代以后的共和国"任期届满,某某当选";军政府"某某接任"
+    if (!royalSeg(p, x.dynasty ?? 0)) text = modernConsul(p, x, y) ? `${ref}任期届满,${x.name}${segRegime(p, x.dynasty ?? 0) === 'junta' ? '接任' : '当选'}` : `${ref}任满,${x.name}继任`;
     else if (prev.author !== undefined) {
       // 作者立的君主到期退位(生死归人物卡管),继他之位的不连成他的儿子
       const then = p.eastern && (p.lineage === 'khanate' || tier <= 0) ? `${x.name}继为${p.lineage === 'khanate' && tier > 0 ? khanWord(x) : '首领'}` : p.eastern ? `${x.name}即位${x.title ? `,是为${rulerTitle(civ, x)}` : ''}` : `${rulerShort(civ, x)}即位`;

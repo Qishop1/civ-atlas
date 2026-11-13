@@ -26,6 +26,7 @@ import { deedsShort } from '../../gen/civ/story/officialText';
 import { type Owners } from '../../gen/civ/engine/timeline';
 import { polityKey, resolveKey } from '../../gen/edits';
 import type { AiMessage } from '../types';
+import { INVENTIONS } from '../../gen/civ/inventions';
 
 // ---------------------------------------------------------------------------
 // 选项
@@ -1347,6 +1348,38 @@ interface Parts {
   cultures: string;
   polities: string;
   situation: string;
+  /** 本地分支 modern-pace 第七十八轮:这一段结束时世上已经有了什么(近现代以后才有) */
+  era?: string;
+}
+
+/** 第七十八轮:〔时代〕里列哪些发明(近现代以后,按先后);只列这一段结束时已经有的,太多时取最近的 MAX_ERA_ITEMS 样 */
+const ERA_ITEMS = ['铁路', '电报', '汽船', '电力', '汽车', '无线电', '飞机', '电网', '喷气发动机', '机械化部队', '核武器', '计算机', '运载火箭', '人造卫星', '载人航天', '通信卫星', '侦察卫星', '互联网', '卫星导航', '人工智能', '可回收火箭', '月球基地', '轨道工业', '天基太阳能', '火星殖民'];
+const MAX_ERA_ITEMS = 14;
+
+/**
+ * 第七十八轮:y 年时世上已经有了什么(推演的发明记录:哪一样在世上第一次出现);还没有铁路的(近代以前)不写。
+ * 近地轨道被碎片封锁着的(史事 orbit n = 1)写出来:卫星、导航失效,航天发射暂停
+ */
+function eraText(civ: Civ, y: Year, from: Year = y): string {
+  const h = civ.history ?? civ;
+  const dev = h.development;
+  if (!dev) return '';
+  const first = new Map<string, number>();
+  for (const e of dev.events as { kind: string; year: number; invention?: number }[]) {
+    if (e.kind !== 'invent' || e.invention === undefined || e.year > y) continue;
+    const n = INVENTIONS[e.invention]?.name;
+    if (n && !(first.get(n)! <= e.year)) first.set(n, e.year);
+  }
+  if (!first.has('铁路')) return '';
+  const have = ERA_ITEMS.filter((n) => first.has(n));
+  const shown = have.length > MAX_ERA_ITEMS ? have.slice(have.length - MAX_ERA_ITEMS) : have;
+  const lines = [`- 第 ${Y(y)} 年时世上已经有:${shown.join('、')}${have.length > shown.length ? '(更早的铁路、飞机、电网、核武器这些都有,不再列)' : ''}`];
+  for (const a of h.annals) {
+    if (a.kind !== 'orbit' || a.n !== 1 || a.year > y) continue;
+    const until = a.oob?.[2] ?? a.year + (a.oob?.[0] ?? 0);
+    if (until > from) lines.push(`- 第 ${Y(a.year)} 年起近地轨道被卫星碎片封锁(约到第 ${Y(until)} 年清理完):这期间各国卫星、卫星导航失效,航天发射暂停,轨道货运停摆`);
+  }
+  return lines.join('\n');
 }
 
 /**
@@ -1389,7 +1422,7 @@ function contextParts(civ: Civ, info: ScopeInfo, book: ScopeInfo, picked: Set<Ch
     left -= line.length + 1;
   }
   if (skipped) polLines.push(`- (另有${cnNumber(skipped)}个国家从略)`);
-  return { overview, geography, cultures: cuLines.join('\n'), polities: polLines.join('\n'), situation };
+  return { overview, geography, cultures: cuLines.join('\n'), polities: polLines.join('\n'), situation, era: eraText(civ, clip.to, clip.from) };
 }
 
 function materialText(parts: Parts, chron: string, dropped: number, chapter = '', clipTo?: Year, people = ''): string {
@@ -1406,6 +1439,7 @@ function materialText(parts: Parts, chron: string, dropped: number, chapter = ''
     out.push('', `〔国家〕(括号里是起名和行文的风格提示,不要写进正文;国号随年份变化,写到哪一年就用那一年的国号${until})`, parts.polities);
   }
   if (parts.situation) out.push('', '〔格局〕(当时各国的大小和国都)', parts.situation);
+  if (parts.era) out.push('', '〔时代〕(这一段结束时世上已经有的东西;写近现代的事按这个补细节)', parts.era);
   if (people) out.push('', '〔人物〕(列传可用的统帅、名臣:生卒年照这里写;每一仗写的是"攻方、守方 → 结果",攻守和结果不能改)', people);
   out.push('', `〔编年史〕${chapter}`, chron || '- (这段时间没有记下什么事)');
   return out.join('\n');
@@ -1416,6 +1450,12 @@ const CHOOSE =
   '- 取舍:以 ★ 大事为骨架,挑能说明因果的小事写,其余一笔带过或略去;不要逐条复述编年史,要写成连贯的叙述;材料里没有的时期就少写,不要硬凑';
 
 /** 写作要求里的"笔调"一条(各文体共用) */
+/** 第七十八轮:补细节按时代补(用户"神他妈未来时代的跨境商队");开战由头不另编;事件不挂错人;正文不提"材料" */
+export const ERA_RULE =
+  '- 时代:细节只能按当时的时代补,〔时代〕里列着那时世上已经有的东西 —— 近现代以后的救灾、调兵、通商写铁路、航空、电网、管道、配给、空运、医疗队、无人机、卫星、轨道货运这些,' +
+  '不要写驿马、官仓开仓、商队、木船、宫廷减膳这类古代的东西;开战的由头只写材料里给的(如"因边界争端""为完成全球统一"),不要另编"商队被劫""使节被杀"之类的具体事件;' +
+  '一件事只能写到当时在位、在世的人名下,某人即位以前、去世以后的事不要算到他头上;正文里不要出现"材料""记载""数据"这类字眼';
+
 export const TONE = '- 笔调:平实,少用比喻、排比和空泛的抒情;不要每段都发议论,结尾不要升华成大道理;战争写攻守得失,不要渲染杀戮和血腥场面(服务商的内容审核会拦)';
 
 function styleLine(opts: HistoryOptions): string {
@@ -1505,7 +1545,7 @@ export function buildHistoryPrompts(civ: Civ, opts: HistoryOptions): HistoryProm
       );
     }
     if (people) lines.push(LIVES_RULE);
-    lines.push(CHOOSE, TONE);
+    lines.push(CHOOSE, ERA_RULE, TONE);
     const head = lines.join('\n');
     calls.push({
       title,
@@ -1580,7 +1620,7 @@ export function buildHistoryPrompts(civ: Civ, opts: HistoryOptions): HistoryProm
       if (verdict) angle.push(`"史臣曰"${opts.style === 'annals' ? '(如果有)' : ''}${VERDICTS[((off >> 3) + i) % VERDICTS.length]}`);
       if (angle.length) lines.push(`- 开头和评语:${angle.join(';')}`);
       if (people) lines.push(LIVES_RULE);
-      lines.push(CHOOSE, TONE);
+      lines.push(CHOOSE, ERA_RULE, TONE);
       calls.push({
         title: `${title} · ${label(i)}`,
         chapter: i,
